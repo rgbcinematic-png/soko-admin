@@ -300,6 +300,8 @@ model Order {
   courier       Courier?       @relation(fields: [courierId], references: [id], onDelete: SetNull)
   /// The code the customer gives the courier at the door.
   deliveryCode  String
+  /// Secret key kept on the shopper's phone so only they can see this order's progress.
+  trackingToken String?        @unique
   proofPhotoUrl String?
   deliveredAt   DateTime?
 

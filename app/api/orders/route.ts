@@ -1,4 +1,4 @@
-import { randomInt } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
@@ -179,6 +179,7 @@ export async function POST(request: Request) {
             addressSnapshot: address,
             timeSlot: method.toHome ? d.delivery.timeSlot || null : null,
             deliveryCode: String(randomInt(1000, 10000)),
+            trackingToken: randomBytes(18).toString('base64url'),
             subtotalUsd: subtotal / 100,
             deliveryUsd: fee / 100,
             installUsd: install / 100,
@@ -189,12 +190,13 @@ export async function POST(request: Request) {
             items: { create: itemRows },
             events: { create: { status: 'PENDING', note: 'Commande passée dans l’app' } },
           },
-          select: { ref: true, deliveryCode: true, totalUsd: true, cdfPerUsd: true },
+          select: { ref: true, deliveryCode: true, trackingToken: true, totalUsd: true, cdfPerUsd: true },
         });
         return Response.json(
           {
             ref: order.ref,
             deliveryCode: order.deliveryCode,
+            trackingToken: order.trackingToken,
             totalUsd: Number(order.totalUsd),
             totalCdf: Math.round(Number(order.totalUsd) * Number(order.cdfPerUsd)),
           },
