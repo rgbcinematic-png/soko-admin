@@ -1,0 +1,388 @@
+// Soko — shop database
+// Same shape as Lighthill (Prisma + Neon Postgres), in its own Neon project.
+// All money is stored in US dollars; Congolese francs are worked out with the
+// exchange rate, and each order keeps the rate it was placed at.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------------------------------------------------------------- staff
+
+enum UserRole {
+  ADMIN
+  STAFF
+}
+
+/// People who sign in to the admin (you and your team).
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String
+  passwordHash String
+  role         UserRole  @default(STAFF)
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  rates       ExchangeRate[]
+  orderEvents OrderEvent[]
+  stockMoves  StockMovement[]
+}
+
+/// The day's rate, set by you each morning. The newest row is the one in use.
+model ExchangeRate {
+  id            String   @id @default(cuid())
+  cdfPerUsd     Decimal  @db.Decimal(12, 2)
+  effectiveFrom DateTime @default(now())
+  setById       String?
+  setBy         User?    @relation(fields: [setById], references: [id], onDelete: SetNull)
+
+  @@index([effectiveFrom])
+}
+
+// ---------------------------------------------------------------- catalogue
+
+/// Téléphones, Énergie, Électronique… Sub-categories point to a parent.
+model Category {
+  id       String     @id @default(cuid())
+  slug     String     @unique
+  nameFr   String
+  nameEn   String?
+  nameLn   String?
+  nameSw   String?
+  icon     String?    // a lucide icon name, e.g. "smartphone"
+  position Int        @default(0)
+  isActive Boolean    @default(true)
+
+  parentId String?
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children Category[] @relation("CategoryTree")
+
+  products Product[]
+
+  @@index([parentId, position])
+}
+
+enum ProductStatus {
+  DRAFT     // not visible in the app
+  ACTIVE    // on sale
+  ARCHIVED  // no longer sold, kept for old orders
+}
+
+model Product {
+  id          String        @id @default(cuid())
+  ref         String        @unique // SK-P-2610-0001
+  slug        String        @unique
+  status      ProductStatus @default(DRAFT)
+
+  title       String
+  summary     String?       @db.Text
+  description String?       @db.Text
+  brand       String?
+
+  categoryId  String
+  category    Category      @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  images      String[]      @default([]) // Cloudinary URLs, first one is the cover
+  videoUrl    String?
+
+  /// Short spec lines shown on the product page: [{ label, value }].
+  specs       Json          @default("[]")
+
+  warrantyMonths     Int      @default(0)
+  installAvailable   Boolean  @default(false)
+  installPriceUsd    Decimal? @db.Decimal(12, 2)
+  instalmentsAllowed Boolean  @default(false) // "Payable en 3 fois"
+  bigItem            Boolean  @default(false) // needs the van, not a motorbike
+
+  featured    Boolean   @default(false)
+  publishedAt DateTime?
+
+  variants    ProductVariant[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([status, publishedAt])
+  @@index([categoryId])
+}
+
+/// What the customer actually picks: a TV size, a dress size/colour, etc.
+/// A product with no choices still has one variant.
+model ProductVariant {
+  id           String   @id @default(cuid())
+  productId    String
+  product      Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  sku          String   @unique
+  label        String   @default("Standard") // 43", M / Bleu…
+  priceUsd     Decimal  @db.Decimal(12, 2)
+  compareAtUsd Decimal? @db.Decimal(12, 2) // the crossed-out "was" price
+  costUsd      Decimal? @db.Decimal(12, 2) // what it cost you — admin only, for margins
+  stock        Int      @default(0)
+  position     Int      @default(0)
+  isActive     Boolean  @default(true)
+
+  orderItems   OrderItem[]
+  stockMoves   StockMovement[]
+
+  @@index([productId, position])
+}
+
+enum StockReason {
+  PURCHASE   // new stock arrived
+  SALE       // taken by an order
+  RETURN     // came back from a customer
+  ADJUSTMENT // counted and corrected
+}
+
+/// Every change to stock, so you can always see why a number moved.
+model StockMovement {
+  id        String         @id @default(cuid())
+  variantId String
+  variant   ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  change    Int            // +10 arrived, -1 sold
+  reason    StockReason
+  orderId   String?
+  note      String?
+  byId      String?
+  by        User?          @relation(fields: [byId], references: [id], onDelete: SetNull)
+  createdAt DateTime       @default(now())
+
+  @@index([variantId, createdAt])
+}
+
+// ---------------------------------------------------------------- customers
+
+enum Language {
+  FR
+  LN
+  SW
+  EN
+}
+
+/// Shoppers sign up with their phone number, no email needed.
+model Customer {
+  id        String    @id @default(cuid())
+  phone     String    @unique // +243…
+  name      String?
+  email     String?
+  language  Language  @default(FR)
+  points    Int       @default(0)
+  isBlocked Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  places    DeliveryPlace[]
+  orders    Order[]
+}
+
+/// A saved delivery spot: commune + quartier + landmark, not a street address.
+model DeliveryPlace {
+  id           String   @id @default(cuid())
+  customerId   String
+  customer     Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  label        String   @default("Maison") // Maison, Bureau, Maman…
+  city         String   @default("Kinshasa")
+  commune      String   // Gombe, Limete, Ngaliema…
+  quartier     String?
+  avenue       String?
+  landmark     String   // "près du rond-point Socimat"
+  instructions String?  @db.Text
+  voiceNoteUrl String?  // a recorded direction, in any language
+  lat          Float?
+  lng          Float?
+  isDefault    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  orders       Order[]
+
+  @@index([customerId])
+}
+
+/// Partner shops where customers collect orders.
+model PickupPoint {
+  id           String   @id @default(cuid())
+  name         String
+  city         String   @default("Kinshasa")
+  commune      String
+  landmark     String
+  phone        String?
+  openingHours String?
+  isActive     Boolean  @default(true)
+
+  orders       Order[]
+}
+
+enum Vehicle {
+  MOTO
+  VAN
+  CAR
+}
+
+model Courier {
+  id       String  @id @default(cuid())
+  name     String
+  phone    String  @unique
+  vehicle  Vehicle @default(MOTO)
+  isActive Boolean @default(true)
+
+  orders   Order[]
+}
+
+// ---------------------------------------------------------------- orders
+
+enum OrderStatus {
+  PENDING          // placed, waiting for payment or confirmation
+  CONFIRMED        // paid, or cash on delivery accepted
+  PACKED
+  OUT_FOR_DELIVERY
+  READY_FOR_PICKUP
+  DELIVERED
+  CANCELLED
+  RETURNED
+}
+
+enum DeliveryMethod {
+  EXPRESS_MOTO     // same day, small items
+  STANDARD         // next day, time slot
+  BIG_ITEM         // van, 1–3 days, optional installation
+  PICKUP           // collect at a pickup point
+  PROVINCE         // Lubumbashi, Goma… via partner transport
+}
+
+enum PaymentMethod {
+  MPESA
+  AIRTEL_MONEY
+  ORANGE_MONEY
+  CASH_ON_DELIVERY
+  CARD
+}
+
+enum PaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+  REFUNDED
+}
+
+model Order {
+  id            String         @id @default(cuid())
+  ref           String         @unique // SK-2610-0001
+  status        OrderStatus    @default(PENDING)
+
+  customerId    String
+  customer      Customer       @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  /// Who receives it, when it is not the buyer (a gift, family at home).
+  recipientName  String?
+  recipientPhone String?
+
+  deliveryMethod  DeliveryMethod
+  deliveryPlaceId String?
+  deliveryPlace   DeliveryPlace? @relation(fields: [deliveryPlaceId], references: [id], onDelete: SetNull)
+  pickupPointId   String?
+  pickupPoint     PickupPoint?   @relation(fields: [pickupPointId], references: [id], onDelete: SetNull)
+  /// A copy of the address as it was, so editing a saved place never rewrites history.
+  addressSnapshot Json?
+  timeSlot        String?        // "Matin", "Après-midi", "Soir"
+
+  courierId     String?
+  courier       Courier?       @relation(fields: [courierId], references: [id], onDelete: SetNull)
+  /// The code the customer gives the courier at the door.
+  deliveryCode  String
+  proofPhotoUrl String?
+  deliveredAt   DateTime?
+
+  subtotalUsd   Decimal        @db.Decimal(12, 2)
+  deliveryUsd   Decimal        @default(0) @db.Decimal(12, 2)
+  installUsd    Decimal        @default(0) @db.Decimal(12, 2)
+  discountUsd   Decimal        @default(0) @db.Decimal(12, 2)
+  pointsUsed    Int            @default(0)
+  totalUsd      Decimal        @db.Decimal(12, 2)
+  cdfPerUsd     Decimal        @db.Decimal(12, 2) // rate at the moment of ordering
+
+  paymentMethod PaymentMethod
+  paymentStatus PaymentStatus  @default(UNPAID)
+
+  customerNote  String?        @db.Text
+  internalNote  String?        @db.Text
+
+  items         OrderItem[]
+  events        OrderEvent[]
+  payments      Payment[]
+
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([status, createdAt])
+  @@index([customerId, createdAt])
+  @@index([courierId, status])
+}
+
+model OrderItem {
+  id           String         @id @default(cuid())
+  orderId      String
+  order        Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  variantId    String
+  variant      ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  /// Copied at order time so old orders still read right after a product changes.
+  title        String
+  variantLabel String
+  unitPriceUsd Decimal        @db.Decimal(12, 2)
+  quantity     Int            @default(1)
+  withInstall  Boolean        @default(false)
+  lineTotalUsd Decimal        @db.Decimal(12, 2)
+
+  @@index([orderId])
+}
+
+/// The tracking timeline the customer sees: confirmed → packed → on the way…
+model OrderEvent {
+  id        String      @id @default(cuid())
+  orderId   String
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status    OrderStatus
+  note      String?
+  actorId   String?
+  actor     User?       @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  createdAt DateTime    @default(now())
+
+  @@index([orderId, createdAt])
+}
+
+enum PaymentState {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
+/// One row per payment attempt. Several rows on one order = instalments or a retry.
+model Payment {
+  id          String        @id @default(cuid())
+  orderId     String
+  order       Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  method      PaymentMethod
+  state       PaymentState  @default(PENDING)
+  amountUsd   Decimal       @db.Decimal(12, 2)
+  currency    String        @default("USD") // USD or CDF, as the customer paid
+  amountPaid  Decimal?      @db.Decimal(14, 2) // in that currency
+  provider    String?       // the mobile-money company, once chosen
+  providerRef String?       @unique
+  payerPhone  String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([orderId])
+}
