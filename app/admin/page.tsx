@@ -22,7 +22,8 @@ export default function AdminHome() {
 async function Figures() {
   await connection();
   const onSale = { isActive: true, product: { status: 'ACTIVE' as const } };
-  const [active, drafts, outOfStock, lowStock] = await Promise.all([
+  const [newOrders, active, drafts, outOfStock, lowStock] = await Promise.all([
+    prisma.order.count({ where: { status: 'PENDING' } }),
     prisma.product.count({ where: { status: 'ACTIVE' } }),
     prisma.product.count({ where: { status: 'DRAFT' } }),
     prisma.productVariant.count({ where: { ...onSale, stock: { lte: 0 } } }),
@@ -30,6 +31,7 @@ async function Figures() {
   ]);
 
   const tiles = [
+    { label: 'New orders to confirm', value: newOrders, href: '/admin/orders?show=new', alert: newOrders > 0 },
     { label: 'Products on sale', value: active, href: '/admin/products?status=ACTIVE' },
     { label: 'Drafts', value: drafts, href: '/admin/products?status=DRAFT' },
     { label: 'Variants out of stock', value: outOfStock, href: '/admin/products?status=ACTIVE', alert: outOfStock > 0 },
@@ -37,7 +39,7 @@ async function Figures() {
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+    <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
       {tiles.map((t) => (
         <Link key={t.label} href={t.href} className="flex flex-col gap-1 rounded-2xl bg-white p-5 hover:shadow-sm">
           <span className={`text-3xl font-extrabold ${t.alert ? 'text-[#BE123C]' : ''}`}>{t.value}</span>

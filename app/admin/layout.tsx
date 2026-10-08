@@ -25,7 +25,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           <Link href="/admin" className={navLink}>Dashboard</Link>
           <Link href="/admin/products" className={navLink}>Products</Link>
           <Link href="/admin/products/new" className={navLink}>Add a product</Link>
-          <span className="px-3 py-2 text-sm text-white/50">Orders (coming soon)</span>
+          <Link href="/admin/orders" className={navLink}>Orders</Link>
+          <Link href="/admin/pickup-points" className={navLink}>Pickup points</Link>
         </nav>
         <div className="ml-auto flex items-center gap-3 text-sm md:ml-0 md:mt-auto md:flex-col md:items-stretch">
           <Suspense fallback={<span className="text-white/60">…</span>}>
