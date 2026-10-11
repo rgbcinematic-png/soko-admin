@@ -15,19 +15,19 @@ const prisma = new PrismaClient();
 
 // The six categories from the app design, plus the appliance sub-categories.
 const CATEGORIES = [
-  { slug: 'telephones', nameFr: 'Téléphones', nameEn: 'Phones', icon: 'smartphone' },
-  { slug: 'energie', nameFr: 'Énergie', nameEn: 'Power & energy', icon: 'zap' },
-  { slug: 'electronique', nameFr: 'Électronique', nameEn: 'Electronics', icon: 'tv' },
-  { slug: 'electromenager', nameFr: 'Électroménager', nameEn: 'Appliances', icon: 'refrigerator' },
-  { slug: 'mode', nameFr: 'Mode', nameEn: 'Fashion', icon: 'shirt' },
-  { slug: 'maison', nameFr: 'Maison', nameEn: 'Home', icon: 'house' },
+  { slug: 'telephones', nameFr: 'Téléphones', nameEn: 'Phones', nameLn: 'Ba téléphone', nameSw: 'Simu', icon: 'smartphone' },
+  { slug: 'energie', nameFr: 'Énergie', nameEn: 'Power & energy', nameLn: 'Courant', nameSw: 'Nishati', icon: 'zap' },
+  { slug: 'electronique', nameFr: 'Électronique', nameEn: 'Electronics', nameLn: 'Électronique', nameSw: 'Elektroniki', icon: 'tv' },
+  { slug: 'electromenager', nameFr: 'Électroménager', nameEn: 'Appliances', nameLn: 'Biloko ya ndako', nameSw: 'Vifaa vya nyumbani', icon: 'refrigerator' },
+  { slug: 'mode', nameFr: 'Mode', nameEn: 'Fashion', nameLn: 'Bilamba', nameSw: 'Mitindo', icon: 'shirt' },
+  { slug: 'maison', nameFr: 'Maison', nameEn: 'Home', nameLn: 'Ndako', nameSw: 'Nyumba', icon: 'house' },
 ];
 const APPLIANCE_SUBS = [
-  { slug: 'refrigerateurs', nameFr: 'Réfrigérateurs', nameEn: 'Fridges' },
-  { slug: 'congelateurs', nameFr: 'Congélateurs', nameEn: 'Freezers' },
-  { slug: 'climatiseurs', nameFr: 'Climatiseurs', nameEn: 'Air conditioners' },
-  { slug: 'ventilateurs', nameFr: 'Ventilateurs', nameEn: 'Fans' },
-  { slug: 'cuisine', nameFr: 'Cuisine', nameEn: 'Kitchen' },
+  { slug: 'refrigerateurs', nameFr: 'Réfrigérateurs', nameEn: 'Fridges', nameLn: 'Ba frigo', nameSw: 'Friji' },
+  { slug: 'congelateurs', nameFr: 'Congélateurs', nameEn: 'Freezers', nameLn: 'Ba congélateur', nameSw: 'Friza' },
+  { slug: 'climatiseurs', nameFr: 'Climatiseurs', nameEn: 'Air conditioners', nameLn: 'Ba climatiseur', nameSw: 'Viyoyozi' },
+  { slug: 'ventilateurs', nameFr: 'Ventilateurs', nameEn: 'Fans', nameLn: 'Ba ventilateur', nameSw: 'Feni' },
+  { slug: 'cuisine', nameFr: 'Cuisine', nameEn: 'Kitchen', nameLn: 'Kuku', nameSw: 'Jikoni' },
 ];
 
 async function main() {
@@ -54,7 +54,7 @@ async function main() {
   for (const [i, c] of CATEGORIES.entries()) {
     await prisma.category.upsert({
       where: { slug: c.slug },
-      update: { nameFr: c.nameFr, nameEn: c.nameEn, icon: c.icon, position: i },
+      update: { nameFr: c.nameFr, nameEn: c.nameEn, nameLn: c.nameLn, nameSw: c.nameSw, icon: c.icon, position: i },
       create: { ...c, position: i },
     });
   }
@@ -62,7 +62,7 @@ async function main() {
   for (const [i, c] of APPLIANCE_SUBS.entries()) {
     await prisma.category.upsert({
       where: { slug: c.slug },
-      update: { nameFr: c.nameFr, nameEn: c.nameEn, position: i, parentId: appliances.id },
+      update: { nameFr: c.nameFr, nameEn: c.nameEn, nameLn: c.nameLn, nameSw: c.nameSw, position: i, parentId: appliances.id },
       create: { ...c, position: i, parentId: appliances.id },
     });
   }
