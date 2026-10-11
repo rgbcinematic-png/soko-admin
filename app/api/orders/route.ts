@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { hitRateLimit } from '@/lib/rate-limit';
-import { DELIVERY_METHODS, KINSHASA_COMMUNES, methodsFor, TIME_SLOTS } from '@/lib/delivery-fees';
+import { TIME_SLOTS } from '@/lib/delivery-fees';
+import { choicesFor, getDeliverySettings } from '@/lib/delivery-settings';
 import { nextOrderRef, normalizePhone } from '@/lib/orders';
 import { rateNumber, SHOPPER_HEADERS } from '@/lib/storefront';
 
@@ -111,8 +112,10 @@ export async function POST(request: Request) {
       });
     }
 
-    const method = DELIVERY_METHODS.find((m) => m.id === d.delivery.method)!;
-    if (!methodsFor(hasBigItem).some((m) => m.id === method.id)) {
+    const settings = await getDeliverySettings();
+    const method = settings.methods.find((m) => m.id === d.delivery.method);
+    if (!method || !method.isActive) return fail('Ce mode de livraison n’est plus proposé. Choisissez-en un autre.');
+    if (!choicesFor(settings.methods, hasBigItem).some((m) => m.id === method.id)) {
       return fail(
         hasBigItem
           ? 'Votre panier contient un gros article : choisissez la camionnette ou le retrait.'
@@ -120,6 +123,7 @@ export async function POST(request: Request) {
       );
     }
 
+    let surcharge = 0;
     let pickupPointId: string | null = null;
     let address: Prisma.InputJsonValue | undefined;
     let deliveryPlaceId: string | null = null;
@@ -131,8 +135,11 @@ export async function POST(request: Request) {
     if (customer.isBlocked) return fail('Impossible de passer commande. Contactez-nous.', 403);
 
     if (method.toHome) {
-      const commune = KINSHASA_COMMUNES.find((c) => c === d.delivery.commune);
-      if (!commune) return fail('Choisissez votre commune.');
+      const communeSetting = settings.communes.find((c) => c.name === d.delivery.commune);
+      if (!communeSetting) return fail('Choisissez votre commune.');
+      if (!communeSetting.isServed) return fail('Nous ne livrons pas encore dans cette commune. Choisissez le retrait au point relais.');
+      const commune = communeSetting.name;
+      surcharge = cents(communeSetting.surchargeUsd);
       if (!d.delivery.landmark || d.delivery.landmark.length < 3) {
         return fail('Indiquez un point de repère (ex. près de l’église, après le marché).');
       }
@@ -160,7 +167,7 @@ export async function POST(request: Request) {
       pickupPointId = point.id;
     }
 
-    const fee = cents(method.feeUsd);
+    const fee = cents(method.feeUsd) + surcharge;
     const total = subtotal + install + fee;
     const rate = (await rateNumber()) ?? 0;
 

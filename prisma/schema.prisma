@@ -388,3 +388,20 @@ model Payment {
 
   @@index([orderId])
 }
+
+// ---------------------------------------------------------------- delivery prices
+// Set in the admin (Delivery page). A missing row means "use the default in lib/delivery-fees.ts".
+
+model DeliveryOption {
+  method    DeliveryMethod @id
+  feeUsd    Decimal        @db.Decimal(10, 2)
+  isActive  Boolean        @default(true)
+  updatedAt DateTime       @updatedAt
+}
+
+model CommuneSetting {
+  name         String   @id
+  isServed     Boolean  @default(true)
+  surchargeUsd Decimal  @default(0) @db.Decimal(10, 2)
+  updatedAt    DateTime @updatedAt
+}
