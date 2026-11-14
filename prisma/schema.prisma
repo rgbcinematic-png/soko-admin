@@ -48,6 +48,26 @@ model ExchangeRate {
   @@index([effectiveFrom])
 }
 
+// ---------------------------------------------------------------- markets
+
+/// Where Soko sells. The delivery address decides the market; the market decides
+/// the currency and the payment methods offered. "CD" = RD Congo, "EU" = Europe.
+/// Product prices are still in US dollars (DRC) until Europe gets its own prices.
+model Market {
+  id             String          @id // "CD", "EU"
+  name           String
+  currency       String          // "USD", "EUR"
+  /// Countries delivered to, as ISO codes: ["CD"], ["BE", "FR"].
+  countries      String[]        @default([])
+  /// Payment methods switched on here. A method is only offered once its provider is connected (lib/payments.ts).
+  paymentMethods PaymentMethod[] @default([])
+  isActive       Boolean         @default(false)
+  position       Int             @default(0)
+  updatedAt      DateTime        @updatedAt
+
+  orders         Order[]
+}
+
 // ---------------------------------------------------------------- catalogue
 
 /// Téléphones, Énergie, Électronique… Sub-categories point to a parent.
@@ -280,6 +300,12 @@ model Order {
   ref           String         @unique // SK-2610-0001
   status        OrderStatus    @default(PENDING)
 
+  marketId      String         @default("CD")
+  market        Market         @relation(fields: [marketId], references: [id], onDelete: Restrict)
+  /// Currency the customer pays in. Money columns ending in "Usd" hold this currency's amounts
+  /// only for USD markets; Europe orders will get their own columns in Level 2.
+  currency      String         @default("USD")
+
   customerId    String
   customer      Customer       @relation(fields: [customerId], references: [id], onDelete: Restrict)
 
@@ -327,6 +353,7 @@ model Order {
   updatedAt     DateTime       @updatedAt
 
   @@index([status, createdAt])
+  @@index([marketId, createdAt])
   @@index([customerId, createdAt])
   @@index([courierId, status])
 }

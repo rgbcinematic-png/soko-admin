@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
 import { cdf, usd } from '@/lib/money';
 import { METHOD_LABEL, nextSteps, STATUS_LABEL, STATUS_STYLE } from '@/lib/orders';
+import { PAYMENT_LABEL } from '@/lib/payments';
 import { moveOrder, saveOrderNote } from '../actions';
 
 type Params = Promise<{ id: string }>;
@@ -156,7 +157,8 @@ async function OrderDetail({ params, searchParams }: { params: Params; searchPar
           {Number(order.installUsd) > 0 && (<><dt className="text-[#5B6B7C]">Installation</dt><dd className="text-right">{usd(order.installUsd)}</dd></>)}
           <dt className="font-bold">Total</dt><dd className="text-right text-lg font-extrabold">{usd(order.totalUsd)}</dd>
           <dt className="text-[#5B6B7C]">In francs</dt><dd className="text-right">{cdf(order.totalUsd, order.cdfPerUsd)}</dd>
-          <dt className="text-[#5B6B7C]">Payment</dt><dd className="text-right">Cash on delivery · {order.paymentStatus === 'PAID' ? 'paid' : order.paymentStatus.toLowerCase()}</dd>
+          <dt className="text-[#5B6B7C]">Payment</dt><dd className="text-right">{PAYMENT_LABEL[order.paymentMethod]} · {order.paymentStatus.toLowerCase()}</dd>
+          <dt className="text-[#5B6B7C]">Market</dt><dd className="text-right">{order.marketId} · {order.currency}</dd>
         </dl>
       </section>
 

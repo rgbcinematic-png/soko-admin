@@ -1,14 +1,18 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import { z } from 'zod';
-import { Prisma } from '@prisma/client';
+import { PaymentMethod, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { hitRateLimit } from '@/lib/rate-limit';
 import { TIME_SLOTS } from '@/lib/delivery-fees';
 import { choicesFor, getDeliverySettings } from '@/lib/delivery-settings';
+import { marketClosedResponse, shopperMarket } from '@/lib/markets';
 import { nextOrderRef, normalizePhone } from '@/lib/orders';
+import { offeredMethods } from '@/lib/payments';
 import { rateNumber, SHOPPER_HEADERS } from '@/lib/storefront';
 
 const Body = z.object({
+  /** Missing on app versions released before markets: those are RD Congo. */
+  market: z.string().trim().max(4).optional(),
   customer: z.object({
     name: z.string().trim().min(2, 'Entrez votre nom.').max(80),
     phone: z.string().trim().min(6, 'Entrez votre numéro de téléphone.').max(24),
@@ -36,14 +40,14 @@ const Body = z.object({
     timeSlot: z.string().trim().max(40).optional(),
     pickupPointId: z.string().max(40).optional(),
   }),
-  paymentMethod: z.literal('CASH_ON_DELIVERY'),
+  paymentMethod: z.enum(PaymentMethod, { error: 'Choisissez un moyen de paiement.' }).default('CASH_ON_DELIVERY'),
   note: z.string().trim().max(500).optional(),
 });
 
 const fail = (error: string, status = 400) => Response.json({ error }, { status, headers: SHOPPER_HEADERS });
 const cents = (n: number) => Math.round(n * 100);
 
-/** POST /api/orders — places an order from the app. Cash on delivery only for now. */
+/** POST /api/orders — places an order from the app, in the shopper's market. */
 export async function POST(request: Request) {
   const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'local';
   if (!hitRateLimit(`order:${ip}`, 10, 10 * 60_000)) {
@@ -59,6 +63,18 @@ export async function POST(request: Request) {
   const parsed = Body.safeParse(json);
   if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? 'Vérifiez votre commande.');
   const d = parsed.data;
+
+  let market;
+  try {
+    market = await shopperMarket(d.market);
+  } catch (e) {
+    console.error('orders POST market lookup failed', e);
+    return fail('La commande n’a pas pu être enregistrée. Réessayez.', 500);
+  }
+  if (!market) return marketClosedResponse(SHOPPER_HEADERS);
+  if (!offeredMethods(market.paymentMethods).includes(d.paymentMethod)) {
+    return fail('Ce moyen de paiement n’est pas disponible. Choisissez-en un autre.');
+  }
 
   const phone = normalizePhone(d.customer.phone);
   if (!phone) return fail('Numéro de téléphone invalide. Exemple : 0812345678 ou +243812345678.');
@@ -177,6 +193,8 @@ export async function POST(request: Request) {
         const order = await prisma.order.create({
           data: {
             ref: await nextOrderRef(),
+            market: { connect: { id: market.id } },
+            currency: market.currency,
             customer: { connect: { id: customer.id } },
             recipientName: d.recipient?.name || null,
             recipientPhone,
@@ -192,16 +210,17 @@ export async function POST(request: Request) {
             installUsd: install / 100,
             totalUsd: total / 100,
             cdfPerUsd: rate,
-            paymentMethod: 'CASH_ON_DELIVERY',
+            paymentMethod: d.paymentMethod,
             customerNote: d.note || null,
             items: { create: itemRows },
             events: { create: { status: 'PENDING', note: 'Commande passée dans l’app' } },
           },
-          select: { ref: true, deliveryCode: true, trackingToken: true, totalUsd: true, cdfPerUsd: true },
+          select: { ref: true, currency: true, deliveryCode: true, trackingToken: true, totalUsd: true, cdfPerUsd: true },
         });
         return Response.json(
           {
             ref: order.ref,
+            currency: order.currency,
             deliveryCode: order.deliveryCode,
             trackingToken: order.trackingToken,
             totalUsd: Number(order.totalUsd),
