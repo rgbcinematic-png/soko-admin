@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/prisma';
-import { DELIVERY_METHODS, KINSHASA_COMMUNES, type DeliveryMethodId } from '@/lib/delivery-fees';
+import { DELIVERY_METHODS, type DeliveryMethodId } from '@/lib/delivery-fees';
 
-/** One delivery choice with the price and on/off switch saved in the admin. */
+/** One delivery choice in one city, with the price and on/off switch saved in the admin. */
 export type DeliveryChoice = {
   id: DeliveryMethodId;
   label: string;
@@ -10,21 +10,21 @@ export type DeliveryChoice = {
   toHome: boolean;
   forBigItems: boolean;
   isActive: boolean;
+  /** False until a price is saved for this city; an unsaved type is never offered. */
+  saved: boolean;
 };
 
 export type CommuneChoice = { name: string; isServed: boolean; surchargeUsd: number };
 
-/**
- * Delivery prices and communes as set on the admin's Delivery page.
- * Anything not saved yet uses the defaults in lib/delivery-fees.ts.
- */
-export async function getDeliverySettings(): Promise<{ methods: DeliveryChoice[]; communes: CommuneChoice[] }> {
+/** A city's delivery prices and communes, as set on the admin's Delivery page. */
+export async function getDeliverySettings(
+  cityId: string,
+): Promise<{ methods: DeliveryChoice[]; communes: CommuneChoice[] }> {
   const [options, communes] = await Promise.all([
-    prisma.deliveryOption.findMany(),
-    prisma.communeSetting.findMany(),
+    prisma.deliveryOption.findMany({ where: { cityId } }),
+    prisma.communeSetting.findMany({ where: { cityId }, orderBy: { name: 'asc' } }),
   ]);
   const byMethod = new Map(options.map((o) => [o.method as string, o]));
-  const byCommune = new Map(communes.map((c) => [c.name, c]));
 
   return {
     methods: DELIVERY_METHODS.map((m) => {
@@ -35,18 +35,12 @@ export async function getDeliverySettings(): Promise<{ methods: DeliveryChoice[]
         detail: m.detail,
         toHome: m.toHome,
         forBigItems: m.forBigItems,
-        feeUsd: saved ? Number(saved.feeUsd) : m.feeUsd,
-        isActive: saved ? saved.isActive : true,
+        feeUsd: saved ? Number(saved.feeUsd) : 0,
+        isActive: saved ? saved.isActive : false,
+        saved: Boolean(saved),
       };
     }),
-    communes: KINSHASA_COMMUNES.map((name) => {
-      const saved = byCommune.get(name);
-      return {
-        name,
-        isServed: saved ? saved.isServed : true,
-        surchargeUsd: saved ? Number(saved.surchargeUsd) : 0,
-      };
-    }),
+    communes: communes.map((c) => ({ name: c.name, isServed: c.isServed, surchargeUsd: Number(c.surchargeUsd) })),
   };
 }
 

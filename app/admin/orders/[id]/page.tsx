@@ -37,6 +37,7 @@ async function OrderDetail({ params, searchParams }: { params: Params; searchPar
     where: { id },
     include: {
       customer: true,
+      city: { select: { name: true } },
       pickupPoint: true,
       items: true,
       events: { orderBy: { createdAt: 'asc' }, include: { actor: { select: { name: true } } } },
@@ -107,7 +108,7 @@ async function OrderDetail({ params, searchParams }: { params: Params; searchPar
         </section>
 
         <section className={card}>
-          <h2 className="text-lg font-extrabold">Delivery · {METHOD_LABEL[order.deliveryMethod]}</h2>
+          <h2 className="text-lg font-extrabold">Delivery in {order.city.name} · {METHOD_LABEL[order.deliveryMethod]}</h2>
           {order.pickupPoint ? (
             <p className="text-sm">
               <b>{order.pickupPoint.name}</b>, {order.pickupPoint.commune}<br />{order.pickupPoint.landmark}

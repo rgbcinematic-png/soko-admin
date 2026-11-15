@@ -12,31 +12,40 @@ export const SHOPPER_HEADERS = {
   'Cache-Control': 'no-store',
 };
 
-export const onSale: Prisma.ProductWhereInput = {
+/** A variant sold in this city: switched on and with a price there. */
+const soldIn = (cityId: string): Prisma.ProductVariantWhereInput => ({
+  isActive: true,
+  offers: { some: { cityId, priceUsd: { not: null } } },
+});
+
+/** Products shoppers in this city can see. */
+export const onSaleIn = (cityId: string): Prisma.ProductWhereInput => ({
   status: 'ACTIVE',
-  variants: { some: { isActive: true } },
-};
+  variants: { some: soldIn(cityId) },
+});
 
-const summarySelect = {
-  id: true,
-  slug: true,
-  title: true,
-  brand: true,
-  images: true,
-  installAvailable: true,
-  instalmentsAllowed: true,
-  bigItem: true,
-  variants: {
-    where: { isActive: true },
-    select: { priceUsd: true, compareAtUsd: true, stock: true },
-  },
-} satisfies Prisma.ProductSelect;
+const summarySelect = (cityId: string) =>
+  ({
+    id: true,
+    slug: true,
+    title: true,
+    brand: true,
+    images: true,
+    installAvailable: true,
+    instalmentsAllowed: true,
+    bigItem: true,
+    variants: {
+      where: soldIn(cityId),
+      select: { offers: { where: { cityId }, select: { priceUsd: true, compareAtUsd: true, stock: true } } },
+    },
+  }) satisfies Prisma.ProductSelect;
 
-type SummaryRow = Prisma.ProductGetPayload<{ select: typeof summarySelect }>;
+type SummaryRow = Prisma.ProductGetPayload<{ select: ReturnType<typeof summarySelect> }>;
 
-/** A product card: cheapest on-sale price, its "was" price, and whether any stock is left. */
+/** A product card in one city: cheapest price there, its "was" price, and whether any stock is left there. */
 function toSummary(p: SummaryRow) {
-  const cheapest = [...p.variants].sort((a, b) => (toNumber(a.priceUsd) ?? 0) - (toNumber(b.priceUsd) ?? 0))[0];
+  const offers = p.variants.flatMap((v) => v.offers);
+  const cheapest = [...offers].sort((a, b) => (toNumber(a.priceUsd) ?? 0) - (toNumber(b.priceUsd) ?? 0))[0];
   return {
     id: p.id,
     slug: p.slug,
@@ -46,7 +55,7 @@ function toSummary(p: SummaryRow) {
     priceUsd: toNumber(cheapest?.priceUsd) ?? 0,
     compareAtUsd: toNumber(cheapest?.compareAtUsd),
     hasOptions: p.variants.length > 1,
-    inStock: p.variants.some((v) => v.stock > 0),
+    inStock: offers.some((o) => o.stock > 0),
     installAvailable: p.installAvailable,
     instalmentsAllowed: p.instalmentsAllowed,
     bigItem: p.bigItem,
@@ -59,10 +68,16 @@ export async function rateNumber() {
   return toNumber(rate?.cdfPerUsd);
 }
 
-export async function listProducts(opts: { categorySlug?: string; q?: string; featured?: boolean; take?: number }) {
+export async function listProducts(opts: {
+  cityId: string;
+  categorySlug?: string;
+  q?: string;
+  featured?: boolean;
+  take?: number;
+}) {
   const where: Prisma.ProductWhereInput = {
     AND: [
-      onSale,
+      onSaleIn(opts.cityId),
       opts.featured ? { featured: true } : {},
       opts.categorySlug
         ? { OR: [{ category: { slug: opts.categorySlug } }, { category: { parent: { slug: opts.categorySlug } } }] }
@@ -81,7 +96,7 @@ export async function listProducts(opts: { categorySlug?: string; q?: string; fe
     where,
     orderBy: [{ featured: 'desc' }, { publishedAt: 'desc' }],
     take: Math.min(Math.max(opts.take ?? 40, 1), 100),
-    select: summarySelect,
+    select: summarySelect(opts.cityId),
   });
   return rows.map(toSummary);
 }
@@ -106,9 +121,9 @@ export async function listCategories() {
     .map((top) => ({ ...shape(top), children: all.filter((c) => c.parentId === top.id).map(shape) }));
 }
 
-export async function getProductBySlug(slug: string) {
+export async function getProductBySlug(slug: string, cityId: string) {
   const p = await prisma.product.findFirst({
-    where: { AND: [onSale, { slug }] },
+    where: { AND: [onSaleIn(cityId), { slug }] },
     select: {
       id: true,
       slug: true,
@@ -126,9 +141,13 @@ export async function getProductBySlug(slug: string) {
       bigItem: true,
       category: { select: { slug: true, nameFr: true } },
       variants: {
-        where: { isActive: true },
+        where: soldIn(cityId),
         orderBy: { position: 'asc' },
-        select: { id: true, label: true, priceUsd: true, compareAtUsd: true, stock: true },
+        select: {
+          id: true,
+          label: true,
+          offers: { where: { cityId }, select: { priceUsd: true, compareAtUsd: true, stock: true } },
+        },
       },
     },
   });
@@ -137,14 +156,18 @@ export async function getProductBySlug(slug: string) {
     ...p,
     installPriceUsd: toNumber(p.installPriceUsd),
     specs: Array.isArray(p.specs) ? p.specs : [],
-    variants: p.variants.map((v) => ({
-      id: v.id,
-      label: v.label,
-      priceUsd: toNumber(v.priceUsd) ?? 0,
-      compareAtUsd: toNumber(v.compareAtUsd),
-      // Shoppers see "in stock / only N left", never the exact count above 5.
-      inStock: v.stock > 0,
-      fewLeft: v.stock > 0 && v.stock <= 5 ? v.stock : null,
-    })),
+    variants: p.variants.map((v) => {
+      const offer = v.offers[0];
+      const stock = offer?.stock ?? 0;
+      return {
+        id: v.id,
+        label: v.label,
+        priceUsd: toNumber(offer?.priceUsd) ?? 0,
+        compareAtUsd: toNumber(offer?.compareAtUsd),
+        // Shoppers see "in stock / only N left", never the exact count above 5.
+        inStock: stock > 0,
+        fewLeft: stock > 0 && stock <= 5 ? stock : null,
+      };
+    }),
   };
 }

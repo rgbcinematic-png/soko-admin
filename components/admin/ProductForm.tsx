@@ -4,7 +4,7 @@ import { startTransition, useActionState, useState } from 'react';
 import { saveProduct, type FormState } from '@/app/admin/products/actions';
 import type { CategoryOption } from '@/lib/catalog';
 import ImageGalleryField from './ImageGalleryField';
-import VariantsField, { type VariantRow } from './VariantsField';
+import VariantsField, { type CityColumn, type VariantRow } from './VariantsField';
 
 export type ProductInitial = {
   id: string;
@@ -33,13 +33,15 @@ const heading = 'text-lg font-extrabold';
 export default function ProductForm({
   categories,
   rate,
+  cities,
   initial,
-  stockById,
+  stockByVariant,
 }: {
   categories: CategoryOption[];
   rate: number | null;
+  cities: CityColumn[];
   initial?: ProductInitial;
-  stockById?: Record<string, number>;
+  stockByVariant?: Record<string, Record<string, number>>;
 }) {
   const [state, formAction, pending] = useActionState(saveProduct, {} as FormState);
   const [installOn, setInstallOn] = useState(initial?.installAvailable ?? false);
@@ -109,7 +111,7 @@ export default function ProductForm({
 
       <section className={section}>
         <h2 className={heading}>Variants, prices and stock</h2>
-        <VariantsField initial={initial?.variants} rate={rate} stockById={stockById} />
+        <VariantsField initial={initial?.variants} rate={rate} cities={cities} stockByVariant={stockByVariant} />
       </section>
 
       <section className={section}>

@@ -26,6 +26,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           <Link href="/admin/products" className={navLink}>Products</Link>
           <Link href="/admin/products/new" className={navLink}>Add a product</Link>
           <Link href="/admin/orders" className={navLink}>Orders</Link>
+          <Link href="/admin/cities" className={navLink}>Cities</Link>
           <Link href="/admin/delivery" className={navLink}>Delivery</Link>
           <Link href="/admin/pickup-points" className={navLink}>Pickup points</Link>
         </nav>
@@ -44,7 +45,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </div>
       </aside>
 
-      <div className="min-w-0 flex-1">
+      {/* Full width under the menu on phones, beside it from tablet size up. */}
+      <div className="min-w-0 flex-1 basis-full md:basis-0">
         <header className="border-b border-[#E3E7EC] bg-white px-6 py-3">
           <Suspense fallback={<span className="text-sm text-[#5B6B7C]">Loading today&apos;s rate…</span>}>
             <RateBox />
@@ -57,6 +59,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 }
 
 async function CurrentUser() {
+  // The login is read per request; without this, Next.js warns while prerendering the admin frame.
+  await connection();
   const session = await auth();
   if (!session?.user) redirect('/login');
   return (

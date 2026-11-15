@@ -5,7 +5,7 @@ import { prisma } from '@/lib/prisma';
 import { hitRateLimit } from '@/lib/rate-limit';
 import { TIME_SLOTS } from '@/lib/delivery-fees';
 import { choicesFor, getDeliverySettings } from '@/lib/delivery-settings';
-import { marketClosedResponse, shopperMarket } from '@/lib/markets';
+import { shopperPlace } from '@/lib/cities';
 import { nextOrderRef, normalizePhone } from '@/lib/orders';
 import { offeredMethods } from '@/lib/payments';
 import { rateNumber, SHOPPER_HEADERS } from '@/lib/storefront';
@@ -13,6 +13,8 @@ import { rateNumber, SHOPPER_HEADERS } from '@/lib/storefront';
 const Body = z.object({
   /** Missing on app versions released before markets: those are RD Congo. */
   market: z.string().trim().max(4).optional(),
+  /** Missing on app versions released before cities: those are Kinshasa. */
+  city: z.string().trim().max(40).optional(),
   customer: z.object({
     name: z.string().trim().min(2, 'Entrez votre nom.').max(80),
     phone: z.string().trim().min(6, 'Entrez votre numéro de téléphone.').max(24),
@@ -64,14 +66,15 @@ export async function POST(request: Request) {
   if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? 'Vérifiez votre commande.');
   const d = parsed.data;
 
-  let market;
+  let place;
   try {
-    market = await shopperMarket(d.market);
+    place = await shopperPlace(d.market, d.city, SHOPPER_HEADERS);
   } catch (e) {
     console.error('orders POST market lookup failed', e);
     return fail('La commande n’a pas pu être enregistrée. Réessayez.', 500);
   }
-  if (!market) return marketClosedResponse(SHOPPER_HEADERS);
+  if (place instanceof Response) return place;
+  const { market, city } = place;
   if (!offeredMethods(market.paymentMethods).includes(d.paymentMethod)) {
     return fail('Ce moyen de paiement n’est pas disponible. Choisissez-en un autre.');
   }
@@ -90,12 +93,22 @@ export async function POST(request: Request) {
   }
 
   try {
-    // Prices and stock come from the database, never from the phone.
+    // Prices and stock come from the database, never from the phone, and from the shopper's city.
     const variants = await prisma.productVariant.findMany({
-      where: { id: { in: [...lines.values()].map((l) => l.variantId) }, isActive: true, product: { status: 'ACTIVE' } },
-      include: { product: { select: { title: true, bigItem: true, installAvailable: true, installPriceUsd: true } } },
+      where: {
+        id: { in: [...lines.values()].map((l) => l.variantId) },
+        isActive: true,
+        product: { status: 'ACTIVE' },
+        offers: { some: { cityId: city.id, priceUsd: { not: null } } },
+      },
+      include: {
+        product: { select: { title: true, bigItem: true, installAvailable: true, installPriceUsd: true } },
+        offers: { where: { cityId: city.id }, select: { priceUsd: true, stock: true } },
+      },
     });
-    const byId = new Map(variants.map((v) => [v.id, v]));
+    const byId = new Map(
+      variants.map(({ offers, ...v }) => [v.id, { ...v, priceUsd: offers[0]?.priceUsd ?? 0, stock: offers[0]?.stock ?? 0 }]),
+    );
 
     let subtotal = 0;
     let install = 0;
@@ -128,7 +141,7 @@ export async function POST(request: Request) {
       });
     }
 
-    const settings = await getDeliverySettings();
+    const settings = await getDeliverySettings(city.id);
     const method = settings.methods.find((m) => m.id === d.delivery.method);
     if (!method || !method.isActive) return fail('Ce mode de livraison n’est plus proposé. Choisissez-en un autre.');
     if (!choicesFor(settings.methods, hasBigItem).some((m) => m.id === method.id)) {
@@ -160,24 +173,27 @@ export async function POST(request: Request) {
         return fail('Indiquez un point de repère (ex. près de l’église, après le marché).');
       }
       if (d.delivery.timeSlot && !TIME_SLOTS.some((t) => t === d.delivery.timeSlot)) return fail('Créneau invalide.');
-      const place = {
+      const home = {
         commune,
         quartier: d.delivery.quartier || null,
         avenue: d.delivery.avenue || null,
         landmark: d.delivery.landmark,
         instructions: d.delivery.instructions || null,
       };
-      address = { city: 'Kinshasa', ...place };
+      address = { city: city.name, ...home };
       const saved =
         (await prisma.deliveryPlace.findFirst({
-          where: { customerId: customer.id, commune, landmark: place.landmark },
+          where: { customerId: customer.id, city: city.name, commune, landmark: home.landmark },
           select: { id: true },
         })) ??
-        (await prisma.deliveryPlace.create({ data: { customerId: customer.id, ...place }, select: { id: true } }));
+        (await prisma.deliveryPlace.create({
+          data: { customerId: customer.id, city: city.name, ...home },
+          select: { id: true },
+        }));
       deliveryPlaceId = saved.id;
     } else {
       const point = d.delivery.pickupPointId
-        ? await prisma.pickupPoint.findFirst({ where: { id: d.delivery.pickupPointId, isActive: true } })
+        ? await prisma.pickupPoint.findFirst({ where: { id: d.delivery.pickupPointId, cityId: city.id, isActive: true } })
         : null;
       if (!point) return fail('Choisissez un point relais.');
       pickupPointId = point.id;
@@ -194,6 +210,7 @@ export async function POST(request: Request) {
           data: {
             ref: await nextOrderRef(),
             market: { connect: { id: market.id } },
+            city: { connect: { id: city.id } },
             currency: market.currency,
             customer: { connect: { id: customer.id } },
             recipientName: d.recipient?.name || null,

@@ -37,9 +37,14 @@ export function publicMarket(m: Market) {
   };
 }
 
+/** Open markets with their open cities; a market with no open city is left out. */
 export async function listShopperMarkets() {
-  const rows = await prisma.market.findMany({ where: { isActive: true }, orderBy: { position: 'asc' } });
-  return rows.filter(isOpen).map(publicMarket);
+  const rows = await prisma.market.findMany({
+    where: { isActive: true },
+    orderBy: { position: 'asc' },
+    include: { cities: { where: { isActive: true }, orderBy: { position: 'asc' }, select: { id: true, name: true } } },
+  });
+  return rows.filter((m) => isOpen(m) && m.cities.length > 0).map((m) => ({ ...publicMarket(m), cities: m.cities }));
 }
 
 /** The reply for a market that is unknown or not open yet. */

@@ -4,8 +4,9 @@ import type { OrderStatus, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { usd } from '@/lib/money';
 import { METHOD_LABEL, STATUS_LABEL, STATUS_STYLE } from '@/lib/orders';
+import { allCities, cityIdFrom } from '@/lib/cities';
 
-type Filters = Promise<{ show?: string }>;
+type Filters = Promise<{ show?: string; city?: string }>;
 
 const OPEN: OrderStatus[] = ['PENDING', 'CONFIRMED', 'PACKED', 'OUT_FOR_DELIVERY', 'READY_FOR_PICKUP'];
 const VIEWS: { id: string; label: string; where: Prisma.OrderWhereInput }[] = [
@@ -30,12 +31,16 @@ export default function OrdersPage({ searchParams }: { searchParams: Filters }) 
 async function OrderList({ searchParams }: { searchParams: Filters }) {
   const sp = await searchParams;
   const view = VIEWS.find((v) => v.id === sp.show) ?? VIEWS[0];
+  const cities = await allCities();
+  const city = cities.find((c) => c.id === cityIdFrom(sp.city)) ?? null;
+  const link = (show: string, cityId: string | null) => `/admin/orders?show=${show}${cityId ? `&city=${cityId}` : ''}`;
   const orders = await prisma.order.findMany({
-    where: view.where,
+    where: { AND: [view.where, city ? { cityId: city.id } : {}] },
     orderBy: { createdAt: 'desc' },
     take: 200,
     include: {
       customer: { select: { name: true, phone: true } },
+      city: { select: { name: true } },
       pickupPoint: { select: { name: true } },
       _count: { select: { items: true } },
     },
@@ -49,7 +54,7 @@ async function OrderList({ searchParams }: { searchParams: Filters }) {
         {VIEWS.map((v) => (
           <Link
             key={v.id}
-            href={`/admin/orders?show=${v.id}`}
+            href={link(v.id, city?.id ?? null)}
             aria-current={v.id === view.id ? 'page' : undefined}
             className={`rounded-full px-4 py-2 text-sm font-bold ${v.id === view.id ? 'bg-[#0A2540] text-white' : 'bg-white'}`}
           >
@@ -57,6 +62,20 @@ async function OrderList({ searchParams }: { searchParams: Filters }) {
           </Link>
         ))}
       </nav>
+      {cities.length > 1 && (
+        <nav aria-label="City filter" className="flex flex-wrap gap-2 text-sm">
+          {[{ id: null, name: 'All cities' }, ...cities].map((c) => (
+            <Link
+              key={c.id ?? 'all'}
+              href={link(view.id, c.id)}
+              aria-current={(city?.id ?? null) === c.id ? 'page' : undefined}
+              className={`rounded-full border px-3 py-1 font-bold ${(city?.id ?? null) === c.id ? 'border-[#0A2540] bg-[#0A2540] text-white' : 'border-[#C9D1DA] bg-white'}`}
+            >
+              {c.name}
+            </Link>
+          ))}
+        </nav>
+      )}
 
       {orders.length === 0 ? (
         <p className="rounded-2xl bg-white p-8 text-center font-bold">No orders here yet.</p>
@@ -89,7 +108,9 @@ async function OrderList({ searchParams }: { searchParams: Filters }) {
                     </td>
                     <td className="p-3">
                       {METHOD_LABEL[o.deliveryMethod]}
-                      <div className="text-xs text-[#5B6B7C]">{o.pickupPoint?.name ?? addr.commune ?? ''}</div>
+                      <div className="text-xs text-[#5B6B7C]">
+                        {[o.city.name, o.pickupPoint?.name ?? addr.commune].filter(Boolean).join(' · ')}
+                      </div>
                     </td>
                     <td className="p-3 font-bold">{usd(o.totalUsd)}</td>
                     <td className="p-3">

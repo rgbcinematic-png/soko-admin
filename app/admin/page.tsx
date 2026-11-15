@@ -44,7 +44,12 @@ const IN_PROGRESS: OrderStatus[] = ['CONFIRMED', 'PACKED', 'OUT_FOR_DELIVERY', '
 async function Figures() {
   await connection();
   const { today, week, month } = kinshasaPeriods();
-  const onSale = { isActive: true, product: { status: 'ACTIVE' as const } };
+  // A variant on sale in an open city, with a price there.
+  const onSale = {
+    priceUsd: { not: null },
+    city: { isActive: true },
+    variant: { isActive: true, product: { status: 'ACTIVE' as const } },
+  };
   const delivered = (since: Date) =>
     prisma.order.aggregate({ where: { status: 'DELIVERED', deliveredAt: { gte: since } }, _sum: { totalUsd: true }, _count: true });
 
@@ -62,13 +67,17 @@ async function Figures() {
       prisma.order.count({ where: { status: { in: IN_PROGRESS } } }),
       prisma.product.count({ where: { status: 'ACTIVE' } }),
       prisma.product.count({ where: { status: 'DRAFT' } }),
-      prisma.productVariant.count({ where: { ...onSale, stock: { lte: 0 } } }),
-      prisma.productVariant.count({ where: { ...onSale, stock: { gt: 0, lte: 3 } } }),
-      prisma.productVariant.findMany({
+      prisma.variantCity.count({ where: { ...onSale, stock: { lte: 0 } } }),
+      prisma.variantCity.count({ where: { ...onSale, stock: { gt: 0, lte: 3 } } }),
+      prisma.variantCity.findMany({
         where: { ...onSale, stock: { lte: 3 } },
-        orderBy: [{ stock: 'asc' }, { product: { title: 'asc' } }],
+        orderBy: [{ stock: 'asc' }, { variant: { product: { title: 'asc' } } }],
         take: 8,
-        select: { id: true, label: true, stock: true, product: { select: { id: true, title: true } } },
+        select: {
+          stock: true,
+          city: { select: { id: true, name: true } },
+          variant: { select: { id: true, label: true, product: { select: { id: true, title: true } } } },
+        },
       }),
       prisma.order.findMany({
         orderBy: { createdAt: 'desc' },
@@ -92,8 +101,8 @@ async function Figures() {
     { label: 'Orders in progress', value: inProgress, href: '/admin/orders' },
     { label: 'Products on sale', value: active, href: '/admin/products?status=ACTIVE' },
     { label: 'Drafts', value: drafts, href: '/admin/products?status=DRAFT' },
-    { label: 'Variants out of stock', value: outOfStock, href: '/admin/products?status=ACTIVE', alert: outOfStock > 0 },
-    { label: 'Low stock (3 or fewer)', value: lowStock, href: '/admin/products?status=ACTIVE' },
+    { label: 'Out of stock in a city', value: outOfStock, href: '/admin/products?status=ACTIVE', alert: outOfStock > 0 },
+    { label: 'Low stock in a city (3 or fewer)', value: lowStock, href: '/admin/products?status=ACTIVE' },
   ];
 
   const card = 'rounded-2xl bg-white p-5';
@@ -153,11 +162,11 @@ async function Figures() {
           ) : (
             <ul className="flex flex-col">
               {toReorder.map((v) => (
-                <li key={v.id} className="border-b border-[#F0F2F5] last:border-0">
-                  <Link href={`/admin/products/${v.product.id}`} className="flex items-center justify-between gap-3 py-2 hover:underline">
+                <li key={`${v.variant.id}-${v.city.id}`} className="border-b border-[#F0F2F5] last:border-0">
+                  <Link href={`/admin/products/${v.variant.product.id}#stock`} className="flex items-center justify-between gap-3 py-2 hover:underline">
                     <span>
-                      <b>{v.product.title}</b>
-                      <span className="block text-xs text-[#5B6B7C]">{v.label}</span>
+                      <b>{v.variant.product.title}</b>
+                      <span className="block text-xs text-[#5B6B7C]">{v.variant.label} · {v.city.name}</span>
                     </span>
                     <span className={`rounded-md px-2 py-1 text-xs font-bold ${v.stock <= 0 ? 'bg-[#FDE8EC] text-[#BE123C]' : 'bg-[#FFF3C4] text-[#7A5A00]'}`}>
                       {v.stock <= 0 ? 'Out of stock' : `${v.stock} left`}

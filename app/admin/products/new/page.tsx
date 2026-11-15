@@ -4,6 +4,7 @@ import { connection } from 'next/server';
 import { getCategoryOptions } from '@/lib/catalog';
 import { getCurrentRate } from '@/lib/rate';
 import { toNumber } from '@/lib/money';
+import { allCities } from '@/lib/cities';
 import ProductForm from '@/components/admin/ProductForm';
 
 export default function NewProductPage() {
@@ -22,9 +23,15 @@ export default function NewProductPage() {
 
 async function NewProduct() {
   await connection();
-  const [categories, rate] = await Promise.all([getCategoryOptions(), getCurrentRate()]);
+  const [categories, rate, cities] = await Promise.all([getCategoryOptions(), getCurrentRate(), allCities()]);
   if (categories.length === 0) {
     return <p className="rounded-2xl bg-white p-6">There are no categories yet. Run <code>node prisma/seed.ts</code> first.</p>;
   }
-  return <ProductForm categories={categories} rate={toNumber(rate?.cdfPerUsd)} />;
+  return (
+    <ProductForm
+      categories={categories}
+      rate={toNumber(rate?.cdfPerUsd)}
+      cities={cities.map((c) => ({ id: c.id, name: c.name, isActive: c.isActive }))}
+    />
+  );
 }

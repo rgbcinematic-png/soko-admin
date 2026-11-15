@@ -3,15 +3,16 @@
 import { useActionState } from 'react';
 import { adjustStock, type FormState } from '@/app/admin/products/actions';
 
-/** Add or remove stock on one variant, with the reason recorded. */
-export default function StockAdjust({ variantId }: { variantId: string }) {
+/** Add or remove stock on one variant in one city, with the reason recorded. */
+export default function StockAdjust({ variantId, cityId }: { variantId: string; cityId: string }) {
   const [state, action, pending] = useActionState(adjustStock, {} as FormState);
-  const id = (name: string) => `s-${variantId}-${name}`;
+  const id = (name: string) => `s-${variantId}-${cityId}-${name}`;
   const input = 'h-9 rounded-lg border border-[#C9D1DA] px-2 text-sm outline-none focus:border-[#0A2540]';
 
   return (
     <form action={action} className="flex flex-wrap items-end gap-2">
       <input type="hidden" name="variantId" value={variantId} />
+      <input type="hidden" name="cityId" value={cityId} />
       <div className="flex flex-col gap-1">
         <label htmlFor={id('change')} className="text-xs font-medium text-[#5B6B7C]">Change (+10 or -2)</label>
         <input id={id('change')} name="change" type="number" step="1" required className={`${input} w-28`} />

@@ -39,12 +39,15 @@ const FIELD_NAMES: Record<string, string> = {
   openingStock: 'opening stock',
 };
 
-function firstIssue(error: z.ZodError, variantRows = false): string {
+function firstIssue(error: z.ZodError, variantRows = false, cityNames: Record<string, string> = {}): string {
   const issue = error.issues[0];
   if (!issue) return 'Please check the form.';
   if (variantRows && typeof issue.path[0] === 'number') {
-    const field = FIELD_NAMES[String(issue.path[1])] ?? '';
-    return `Variant ${issue.path[0] + 1}${field ? ` ${field}` : ''}: ${issue.message}`;
+    // [0, 'cities', 'lubumbashi', 'priceUsd'] → "Variant 1 price in Lubumbashi"
+    const inCity = issue.path[1] === 'cities' ? String(issue.path[2]) : null;
+    const field = FIELD_NAMES[String(issue.path[inCity ? 3 : 1])] ?? '';
+    const where = inCity ? ` in ${cityNames[inCity] ?? inCity}` : '';
+    return `Variant ${issue.path[0] + 1}${field ? ` ${field}` : ''}${where}: ${issue.message}`;
   }
   const field = FIELD_NAMES[String(issue.path[0])];
   return field ? `${field}: ${issue.message}` : issue.message;
@@ -63,15 +66,20 @@ const ProductInput = z.object({
   specsText: z.string().max(3000).optional(),
 });
 
+/** A variant's price and stock in one city. No price = not sold there. */
+const CityInput = z.object({
+  priceUsd: optionalMoney.refine((n) => n === null || n > 0, 'needs a price above $0, or leave it empty'),
+  compareAtUsd: optionalMoney,
+  openingStock: z.coerce.number().int('whole units only').min(0, 'cannot be negative').max(100_000).optional().default(0),
+});
+
 const VariantInput = z.object({
   id: z.string().optional(),
   label: z.string().trim().min(1, 'needs a name, e.g. Standard or 43"').max(60),
   sku: z.string().trim().max(40).optional().default(''),
-  priceUsd: z.coerce.number().positive('needs a price above $0').max(1_000_000, 'is too large'),
-  compareAtUsd: optionalMoney,
   costUsd: optionalMoney,
-  openingStock: z.coerce.number().int('whole units only').min(0, 'cannot be negative').max(100_000).optional().default(0),
   isActive: z.boolean().default(true),
+  cities: z.record(z.string().max(40), CityInput).default({}),
 });
 
 /** "Résolution | Full HD" per line → [{ label, value }] */
@@ -112,9 +120,16 @@ export async function saveProduct(_prev: FormState, formData: FormData): Promise
   } catch {
     return { error: 'The variants could not be read. Reload the page and try again.' };
   }
+  const cities = await prisma.city.findMany({ select: { id: true, name: true } });
+  const cityNames = Object.fromEntries(cities.map((c) => [c.id, c.name]));
   const v = z.array(VariantInput).max(30, 'at most 30 variants').safeParse(rawVariants);
-  if (!v.success) return { error: firstIssue(v.error, true) };
-  const variants = v.data.map((row) => ({ ...row, sku: row.sku.toUpperCase() }));
+  if (!v.success) return { error: firstIssue(v.error, true, cityNames) };
+  const variants = v.data.map((row) => ({
+    ...row,
+    sku: row.sku.toUpperCase(),
+    // Only cities that exist; a city left out of the form keeps what it had.
+    cities: Object.entries(row.cities).filter(([cityId]) => cityId in cityNames),
+  }));
 
   const installAvailable = formData.get('installAvailable') === 'on';
   const instalmentsAllowed = formData.get('instalmentsAllowed') === 'on';
@@ -126,6 +141,9 @@ export async function saveProduct(_prev: FormState, formData: FormData): Promise
   }
   if (d.status === 'ACTIVE' && !variants.some((row) => row.isActive)) {
     return { error: 'An active product needs at least one active variant.' };
+  }
+  if (d.status === 'ACTIVE' && !variants.some((row) => row.isActive && row.cities.some(([, c]) => c.priceUsd !== null))) {
+    return { error: 'An active product needs a price in at least one city.' };
   }
   if (installAvailable && d.installPriceUsd === null) {
     return { error: 'Enter the installation price, or untick "Installation available".' };
@@ -202,8 +220,6 @@ export async function saveProduct(_prev: FormState, formData: FormData): Promise
           const common = {
             label: row.label,
             sku: row.sku,
-            priceUsd: row.priceUsd,
-            compareAtUsd: row.compareAtUsd,
             costUsd: row.costUsd,
             isActive: row.isActive,
             position,
@@ -211,20 +227,32 @@ export async function saveProduct(_prev: FormState, formData: FormData): Promise
           if (row.id && existing?.variants.some((x) => x.id === row.id)) {
             await tx.productVariant.update({ where: { id: row.id }, data: common });
             kept.add(row.id);
-          } else {
-            const created = await tx.productVariant.create({
-              data: { ...common, productId: product.id, stock: row.openingStock },
-            });
-            if (row.openingStock > 0) {
-              await tx.stockMovement.create({
-                data: {
-                  variantId: created.id,
-                  change: row.openingStock,
-                  reason: 'PURCHASE',
-                  note: 'Opening stock',
-                  byId: user.id,
-                },
+            // Prices change here; stock only changes through the Stock section, so it is never overwritten.
+            for (const [cityId, c] of row.cities) {
+              await tx.variantCity.upsert({
+                where: { variantId_cityId: { variantId: row.id, cityId } },
+                update: { priceUsd: c.priceUsd, compareAtUsd: c.compareAtUsd },
+                create: { variantId: row.id, cityId, priceUsd: c.priceUsd, compareAtUsd: c.compareAtUsd },
               });
+            }
+          } else {
+            const created = await tx.productVariant.create({ data: { ...common, productId: product.id } });
+            for (const [cityId, c] of row.cities) {
+              await tx.variantCity.create({
+                data: { variantId: created.id, cityId, priceUsd: c.priceUsd, compareAtUsd: c.compareAtUsd, stock: c.openingStock },
+              });
+              if (c.openingStock > 0) {
+                await tx.stockMovement.create({
+                  data: {
+                    variantId: created.id,
+                    cityId,
+                    change: c.openingStock,
+                    reason: 'PURCHASE',
+                    note: 'Opening stock',
+                    byId: user.id,
+                  },
+                });
+              }
             }
           }
         }
@@ -251,6 +279,7 @@ export async function saveProduct(_prev: FormState, formData: FormData): Promise
 
 const StockInput = z.object({
   variantId: z.string().min(1),
+  cityId: z.string().min(1).max(40),
   change: z.coerce
     .number()
     .int('whole units only')
@@ -261,11 +290,12 @@ const StockInput = z.object({
   note: z.string().trim().max(200).optional(),
 });
 
-/** Add or remove stock on one variant, and record why. */
+/** Add or remove stock on one variant in one city, and record why. */
 export async function adjustStock(_prev: FormState, formData: FormData): Promise<FormState> {
   const user = await requireUser();
   const parsed = StockInput.safeParse({
     variantId: formData.get('variantId'),
+    cityId: formData.get('cityId'),
     change: formData.get('change'),
     reason: formData.get('reason'),
     note: formData.get('note') ?? undefined,
@@ -278,16 +308,22 @@ export async function adjustStock(_prev: FormState, formData: FormData): Promise
 
   try {
     const after = await prisma.$transaction(async (tx) => {
-      const variant = await tx.productVariant.findUnique({ where: { id: d.variantId }, select: { stock: true } });
-      if (!variant) throw new Error('missing');
-      if (variant.stock + d.change < 0) throw new Error('negative');
-      const updated = await tx.productVariant.update({
-        where: { id: d.variantId },
-        data: { stock: { increment: d.change } },
+      const [variant, city] = await Promise.all([
+        tx.productVariant.findUnique({ where: { id: d.variantId }, select: { id: true } }),
+        tx.city.findUnique({ where: { id: d.cityId }, select: { id: true } }),
+      ]);
+      if (!variant || !city) throw new Error('missing');
+      const key = { variantId_cityId: { variantId: d.variantId, cityId: d.cityId } };
+      const before = await tx.variantCity.findUnique({ where: key, select: { stock: true } });
+      if ((before?.stock ?? 0) + d.change < 0) throw new Error('negative');
+      const updated = await tx.variantCity.upsert({
+        where: key,
+        update: { stock: { increment: d.change } },
+        create: { variantId: d.variantId, cityId: d.cityId, stock: d.change },
         select: { stock: true },
       });
       await tx.stockMovement.create({
-        data: { variantId: d.variantId, change: d.change, reason: d.reason, note: d.note || null, byId: user.id },
+        data: { variantId: d.variantId, cityId: d.cityId, change: d.change, reason: d.reason, note: d.note || null, byId: user.id },
       });
       return updated.stock;
     });

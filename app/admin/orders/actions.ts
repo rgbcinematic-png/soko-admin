@@ -39,7 +39,10 @@ export async function moveOrder(formData: FormData): Promise<void> {
   try {
     await prisma.$transaction(
       async (tx) => {
-        const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } });
+        const order = await tx.order.findUnique({
+          where: { id: orderId },
+          include: { items: true, city: { select: { name: true } } },
+        });
         if (!order) throw new StepError('This order no longer exists.');
         if (!nextSteps(order.status, order.deliveryMethod).includes(to)) {
           throw new StepError(`An order that is "${STATUS_LABEL[order.status]}" cannot go to "${STATUS_LABEL[to]}". Reload the page.`);
@@ -49,24 +52,46 @@ export async function moveOrder(formData: FormData): Promise<void> {
         const willHold = STOCK_TAKEN.includes(to);
 
         if (!held && willHold) {
-          // Take stock now, and refuse if any line is short.
+          // Take stock now from the order's city, and refuse if any line is short.
           for (const item of order.items) {
-            const v = await tx.productVariant.findUnique({ where: { id: item.variantId }, select: { stock: true, label: true } });
-            if (!v || v.stock < item.quantity) {
-              throw new StepError(`Not enough stock for ${item.title} (${item.variantLabel}): ${v?.stock ?? 0} left, ${item.quantity} ordered.`);
+            // One statement checks and takes, so two staff confirming at once cannot oversell.
+            const taken = await tx.variantCity.updateMany({
+              where: { variantId: item.variantId, cityId: order.cityId, stock: { gte: item.quantity } },
+              data: { stock: { decrement: item.quantity } },
+            });
+            if (taken.count === 0) {
+              const v = await tx.variantCity.findUnique({
+                where: { variantId_cityId: { variantId: item.variantId, cityId: order.cityId } },
+                select: { stock: true },
+              });
+              throw new StepError(
+                `Not enough stock in ${order.city.name} for ${item.title} (${item.variantLabel}): ${v?.stock ?? 0} left, ${item.quantity} ordered.`,
+              );
             }
-            await tx.productVariant.update({ where: { id: item.variantId }, data: { stock: { decrement: item.quantity } } });
             await tx.stockMovement.create({
-              data: { variantId: item.variantId, change: -item.quantity, reason: 'SALE', orderId: order.id, note: order.ref, byId: user.id },
+              data: {
+                variantId: item.variantId,
+                cityId: order.cityId,
+                change: -item.quantity,
+                reason: 'SALE',
+                orderId: order.id,
+                note: order.ref,
+                byId: user.id,
+              },
             });
           }
         }
         if (held && !willHold) {
           for (const item of order.items) {
-            await tx.productVariant.update({ where: { id: item.variantId }, data: { stock: { increment: item.quantity } } });
+            await tx.variantCity.upsert({
+              where: { variantId_cityId: { variantId: item.variantId, cityId: order.cityId } },
+              update: { stock: { increment: item.quantity } },
+              create: { variantId: item.variantId, cityId: order.cityId, stock: item.quantity },
+            });
             await tx.stockMovement.create({
               data: {
                 variantId: item.variantId,
+                cityId: order.cityId,
                 change: item.quantity,
                 reason: 'RETURN',
                 orderId: order.id,

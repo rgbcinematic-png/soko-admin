@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma';
 import { getCategoryOptions } from '@/lib/catalog';
 import { getCurrentRate } from '@/lib/rate';
 import { cdf, toNumber, usd } from '@/lib/money';
+import { allCities } from '@/lib/cities';
 
 type Filters = Promise<{ category?: string; status?: string; q?: string }>;
 
@@ -54,16 +55,17 @@ async function ProductList({ searchParams }: { searchParams: Filters }) {
     ],
   };
 
-  const [categories, rate, products] = await Promise.all([
+  const [categories, rate, cities, products] = await Promise.all([
     getCategoryOptions(),
     getCurrentRate(),
+    allCities(),
     prisma.product.findMany({
       where,
       orderBy: { updatedAt: 'desc' },
       take: 200,
       include: {
         category: { select: { nameFr: true } },
-        variants: { where: { isActive: true }, select: { priceUsd: true, stock: true } },
+        variants: { where: { isActive: true }, select: { offers: { select: { cityId: true, priceUsd: true, stock: true } } } },
       },
     }),
   ]);
@@ -112,17 +114,26 @@ async function ProductList({ searchParams }: { searchParams: Filters }) {
                 <th className="p-3">Photo</th>
                 <th className="p-3">Product</th>
                 <th className="p-3">Category</th>
-                <th className="p-3">Price</th>
-                <th className="p-3">Stock</th>
+                <th className="p-3">Price and stock by city</th>
                 <th className="p-3">Status</th>
               </tr>
             </thead>
             <tbody>
               {products.map((p) => {
-                const prices = p.variants.map((v) => toNumber(v.priceUsd) ?? 0);
-                const low = prices.length ? Math.min(...prices) : null;
-                const high = prices.length ? Math.max(...prices) : null;
-                const stock = p.variants.reduce((sum, v) => sum + v.stock, 0);
+                // One line per city where this product has a price or stock.
+                const byCity = cities
+                  .map((c) => {
+                    const offers = p.variants.flatMap((v) => v.offers.filter((o) => o.cityId === c.id));
+                    const prices = offers.map((o) => toNumber(o.priceUsd)).filter((n): n is number => n !== null);
+                    const stock = offers.reduce((sum, o) => sum + o.stock, 0);
+                    return {
+                      city: c,
+                      low: prices.length ? Math.min(...prices) : null,
+                      high: prices.length ? Math.max(...prices) : null,
+                      stock,
+                    };
+                  })
+                  .filter((row) => row.low !== null || row.stock !== 0);
                 return (
                   <tr key={p.id} className="border-b border-[#F0F2F5] last:border-0">
                     <td className="p-3">
@@ -139,10 +150,18 @@ async function ProductList({ searchParams }: { searchParams: Filters }) {
                     </td>
                     <td className="p-3">{p.category.nameFr}</td>
                     <td className="p-3">
-                      {low === null ? '—' : low === high ? usd(low) : `${usd(low)} – ${usd(high)}`}
-                      {low !== null && rate && <div className="text-xs text-[#5B6B7C]">≈ {cdf(low, rate.cdfPerUsd)}</div>}
+                      {byCity.length === 0 && <span className="text-[#5B6B7C]">No price yet</span>}
+                      {byCity.map(({ city, low, high, stock }) => (
+                        <div key={city.id} className="flex flex-wrap gap-x-2">
+                          <span className="w-24 text-[#5B6B7C]">{city.name}</span>
+                          <span className="font-bold">
+                            {low === null || high === null ? 'not sold' : low === high ? usd(low) : `${usd(low)} – ${usd(high)}`}
+                          </span>
+                          {low !== null && rate && <span className="text-xs text-[#5B6B7C]">≈ {cdf(low, rate.cdfPerUsd)}</span>}
+                          <span className={stock <= 0 ? 'font-bold text-[#BE123C]' : ''}>· {stock} in stock</span>
+                        </div>
+                      ))}
                     </td>
-                    <td className={`p-3 font-bold ${stock <= 0 ? 'text-[#BE123C]' : ''}`}>{stock}</td>
                     <td className="p-3">
                       <span className={`rounded-md px-2 py-1 text-xs font-bold ${STATUS_STYLE[p.status]}`}>{STATUS_LABEL[p.status]}</span>
                     </td>

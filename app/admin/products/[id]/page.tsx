@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma';
 import { getCategoryOptions } from '@/lib/catalog';
 import { getCurrentRate } from '@/lib/rate';
 import { toNumber } from '@/lib/money';
+import { allCities } from '@/lib/cities';
 import ProductForm, { type ProductInitial } from '@/components/admin/ProductForm';
 import StockAdjust from '@/components/admin/StockAdjust';
 
@@ -31,10 +32,10 @@ export default function EditProductPage({ params, searchParams }: { params: Para
 
 async function EditProduct({ params, searchParams }: { params: Params; searchParams: Search }) {
   const [{ id }, sp] = await Promise.all([params, searchParams]);
-  const [product, categories, rate, movements] = await Promise.all([
+  const [product, categories, rate, movements, cities] = await Promise.all([
     prisma.product.findUnique({
       where: { id },
-      include: { variants: { orderBy: { position: 'asc' } } },
+      include: { variants: { orderBy: { position: 'asc' }, include: { offers: true } } },
     }),
     getCategoryOptions(),
     getCurrentRate(),
@@ -42,8 +43,9 @@ async function EditProduct({ params, searchParams }: { params: Params; searchPar
       where: { variant: { productId: id } },
       orderBy: { createdAt: 'desc' },
       take: 15,
-      include: { variant: { select: { label: true } }, by: { select: { name: true } } },
+      include: { variant: { select: { label: true } }, by: { select: { name: true } }, city: { select: { name: true } } },
     }),
+    allCities(),
   ]);
   if (!product) notFound();
 
@@ -69,14 +71,20 @@ async function EditProduct({ params, searchParams }: { params: Params; searchPar
       id: v.id,
       label: v.label,
       sku: v.sku,
-      priceUsd: v.priceUsd.toString(),
-      compareAtUsd: v.compareAtUsd?.toString() ?? '',
       costUsd: v.costUsd?.toString() ?? '',
-      openingStock: '',
       isActive: v.isActive,
+      cities: Object.fromEntries(
+        v.offers.map((o) => [
+          o.cityId,
+          { priceUsd: o.priceUsd?.toString() ?? '', compareAtUsd: o.compareAtUsd?.toString() ?? '', openingStock: '' },
+        ]),
+      ),
     })),
   };
-  const stockById = Object.fromEntries(product.variants.map((v) => [v.id, v.stock]));
+  const stockByVariant = Object.fromEntries(
+    product.variants.map((v) => [v.id, Object.fromEntries(v.offers.map((o) => [o.cityId, o.stock]))]),
+  );
+  const cityColumns = cities.map((c) => ({ id: c.id, name: c.name, isActive: c.isActive }));
   const when = (d: Date) =>
     d.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Kinshasa' });
 
@@ -98,21 +106,35 @@ async function EditProduct({ params, searchParams }: { params: Params; searchPar
         key={product.updatedAt.toISOString()}
         categories={categories}
         rate={toNumber(rate?.cdfPerUsd)}
+        cities={cityColumns}
         initial={initial}
-        stockById={stockById}
+        stockByVariant={stockByVariant}
       />
 
       <section id="stock" className="flex flex-col gap-4 rounded-2xl bg-white p-5">
         <h2 className="text-lg font-extrabold">Stock</h2>
+        <p className="text-sm text-[#5B6B7C]">Each city has its own stock. Orders take stock from the city they are delivered in.</p>
         {product.variants.map((v) => (
-          <div key={v.id} className="flex flex-col gap-2 border-b border-[#F0F2F5] pb-4 last:border-0 last:pb-0">
+          <div key={v.id} className="flex flex-col gap-3 border-b border-[#F0F2F5] pb-4 last:border-0 last:pb-0">
             <div className="flex flex-wrap items-baseline gap-3">
               <span className="font-bold">{v.label}</span>
               <span className="text-xs text-[#5B6B7C]">{v.sku}</span>
-              <span className={`font-bold ${v.stock <= 0 ? 'text-[#BE123C]' : ''}`}>{v.stock} in stock</span>
               {!v.isActive && <span className="text-xs font-bold text-[#5B6B7C]">switched off</span>}
             </div>
-            <StockAdjust variantId={v.id} />
+            {cities.map((c) => {
+              const offer = v.offers.find((o) => o.cityId === c.id);
+              const stock = offer?.stock ?? 0;
+              return (
+                <div key={c.id} className="flex flex-col gap-1 pl-3">
+                  <div className="flex flex-wrap items-baseline gap-3 text-sm">
+                    <span className="w-28 font-bold">{c.name}</span>
+                    <span className={`font-bold ${stock <= 0 ? 'text-[#BE123C]' : ''}`}>{stock} in stock</span>
+                    {!offer?.priceUsd && <span className="text-xs text-[#5B6B7C]">no price: not sold here</span>}
+                  </div>
+                  <StockAdjust variantId={v.id} cityId={c.id} />
+                </div>
+              );
+            })}
           </div>
         ))}
 
@@ -125,6 +147,7 @@ async function EditProduct({ params, searchParams }: { params: Params; searchPar
               <thead className="text-xs uppercase tracking-wide text-[#5B6B7C]">
                 <tr>
                   <th className="py-2 pr-3">When (Kinshasa)</th>
+                  <th className="py-2 pr-3">City</th>
                   <th className="py-2 pr-3">Variant</th>
                   <th className="py-2 pr-3">Change</th>
                   <th className="py-2 pr-3">Reason</th>
@@ -136,6 +159,7 @@ async function EditProduct({ params, searchParams }: { params: Params; searchPar
                 {movements.map((m) => (
                   <tr key={m.id} className="border-t border-[#F0F2F5]">
                     <td className="py-2 pr-3">{when(m.createdAt)}</td>
+                    <td className="py-2 pr-3">{m.city.name}</td>
                     <td className="py-2 pr-3">{m.variant.label}</td>
                     <td className={`py-2 pr-3 font-bold ${m.change < 0 ? 'text-[#BE123C]' : 'text-[#15803D]'}`}>
                       {m.change > 0 ? `+${m.change}` : m.change}
