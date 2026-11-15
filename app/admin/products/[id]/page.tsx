@@ -35,7 +35,7 @@ async function EditProduct({ params, searchParams }: { params: Params; searchPar
   const [product, categories, rate, movements, cities] = await Promise.all([
     prisma.product.findUnique({
       where: { id },
-      include: { variants: { orderBy: { position: 'asc' }, include: { offers: true } } },
+      include: { variants: { orderBy: { position: 'asc' }, include: { offers: true } }, cities: true },
     }),
     getCategoryOptions(),
     getCurrentRate(),
@@ -61,7 +61,7 @@ async function EditProduct({ params, searchParams }: { params: Params; searchPar
     featured: product.featured,
     warrantyMonths: product.warrantyMonths,
     installAvailable: product.installAvailable,
-    installPriceUsd: product.installPriceUsd?.toString() ?? '',
+    installByCity: Object.fromEntries(product.cities.map((c) => [c.cityId, c.installPriceUsd?.toString() ?? ''])),
     instalmentsAllowed: product.instalmentsAllowed,
     bigItem: product.bigItem,
     images: product.images,
@@ -71,12 +71,16 @@ async function EditProduct({ params, searchParams }: { params: Params; searchPar
       id: v.id,
       label: v.label,
       sku: v.sku,
-      costUsd: v.costUsd?.toString() ?? '',
       isActive: v.isActive,
       cities: Object.fromEntries(
         v.offers.map((o) => [
           o.cityId,
-          { priceUsd: o.priceUsd?.toString() ?? '', compareAtUsd: o.compareAtUsd?.toString() ?? '', openingStock: '' },
+          {
+            priceUsd: o.priceUsd?.toString() ?? '',
+            compareAtUsd: o.compareAtUsd?.toString() ?? '',
+            costUsd: o.costUsd?.toString() ?? '',
+            openingStock: '',
+          },
         ]),
       ),
     })),

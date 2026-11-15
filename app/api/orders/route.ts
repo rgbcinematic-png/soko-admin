@@ -102,7 +102,14 @@ export async function POST(request: Request) {
         offers: { some: { cityId: city.id, priceUsd: { not: null } } },
       },
       include: {
-        product: { select: { title: true, bigItem: true, installAvailable: true, installPriceUsd: true } },
+        product: {
+          select: {
+            title: true,
+            bigItem: true,
+            installAvailable: true,
+            cities: { where: { cityId: city.id }, select: { installPriceUsd: true } },
+          },
+        },
         offers: { where: { cityId: city.id }, select: { priceUsd: true, stock: true } },
       },
     });
@@ -126,9 +133,11 @@ export async function POST(request: Request) {
         );
       }
       const unit = cents(Number(v.priceUsd));
-      const withInstall = line.withInstall && v.product.installAvailable && v.product.installPriceUsd !== null;
+      // Installation price of the shopper's city; a city with no price offers no installation.
+      const installPrice = v.product.installAvailable ? v.product.cities[0]?.installPriceUsd : null;
+      const withInstall = line.withInstall && installPrice != null;
       subtotal += unit * line.quantity;
-      if (withInstall) install += cents(Number(v.product.installPriceUsd)) * line.quantity;
+      if (withInstall) install += cents(Number(installPrice)) * line.quantity;
       if (v.product.bigItem) hasBigItem = true;
       itemRows.push({
         variant: { connect: { id: v.id } },

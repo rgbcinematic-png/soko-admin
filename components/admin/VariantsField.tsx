@@ -7,7 +7,7 @@ import { cdf, toNumber } from '@/lib/money';
 export type CityColumn = { id: string; name: string; isActive: boolean };
 
 /** A variant's price and stock in one city, kept as typed text until the server checks it. */
-export type CityCell = { priceUsd: string; compareAtUsd: string; openingStock: string };
+export type CityCell = { priceUsd: string; compareAtUsd: string; costUsd: string; openingStock: string };
 
 /** One row in the form. Numbers are kept as typed text until the server checks them. */
 export type VariantRow = {
@@ -15,20 +15,18 @@ export type VariantRow = {
   id?: string;
   label: string;
   sku: string;
-  costUsd: string;
   isActive: boolean;
   /** By city id. A city with no price is "not sold there". */
   cities: Record<string, CityCell>;
 };
 
-const emptyCell = (): CityCell => ({ priceUsd: '', compareAtUsd: '', openingStock: '' });
+const emptyCell = (): CityCell => ({ priceUsd: '', compareAtUsd: '', costUsd: '', openingStock: '' });
 
 let counter = 0;
 const newRow = (label = ''): VariantRow => ({
   key: `new-${++counter}`,
   label,
   sku: '',
-  costUsd: '',
   isActive: true,
   cities: {},
 });
@@ -63,14 +61,18 @@ export default function VariantsField({
     id: r.id,
     label: r.label,
     sku: r.sku,
-    costUsd: r.costUsd,
     isActive: r.isActive,
     cities: Object.fromEntries(
       cities.map((c) => {
         const cell = r.cities[c.id] ?? emptyCell();
         return [
           c.id,
-          { priceUsd: cell.priceUsd, compareAtUsd: cell.compareAtUsd, openingStock: r.id ? 0 : cell.openingStock || 0 },
+          {
+            priceUsd: cell.priceUsd,
+            compareAtUsd: cell.compareAtUsd,
+            costUsd: cell.costUsd,
+            openingStock: r.id ? 0 : cell.openingStock || 0,
+          },
         ];
       }),
     ),
@@ -81,7 +83,6 @@ export default function VariantsField({
       <input type="hidden" name="variants" value={JSON.stringify(payload)} />
 
       {rows.map((r, i) => {
-        const cost = toNumber(r.costUsd);
         const id = (name: string) => `v-${r.key}-${name}`;
         return (
           <fieldset
@@ -97,11 +98,7 @@ export default function VariantsField({
                 <label htmlFor={id('label')} className={small}>Name (e.g. 43&quot; or M / Bleu)</label>
                 <input id={id('label')} className={input} value={r.label} onChange={(e) => update(r.key, { label: e.target.value })} />
               </div>
-              <div className="flex flex-col gap-1">
-                <label htmlFor={id('cost')} className={small}>Your cost ($)</label>
-                <input id={id('cost')} className={input} inputMode="decimal" value={r.costUsd} onChange={(e) => update(r.key, { costUsd: e.target.value })} />
-              </div>
-              <div className="col-span-2 flex flex-col gap-1 md:col-span-2">
+              <div className="col-span-2 flex flex-col gap-1 md:col-span-3">
                 <label htmlFor={id('sku')} className={small}>SKU (leave blank to create one)</label>
                 <input id={id('sku')} className={input} value={r.sku} onChange={(e) => update(r.key, { sku: e.target.value })} />
               </div>
@@ -126,15 +123,16 @@ export default function VariantsField({
 
             {/* relative: keeps the hidden screen-reader labels inside the scrolling box on phones. */}
             <div className="relative mt-3 overflow-x-auto">
-              <table className="w-full min-w-[560px] text-left text-sm">
+              <table className="w-full min-w-[680px] text-left text-sm">
                 <caption className="pb-1 text-left text-xs text-[#5B6B7C]">
-                  Price per city. Leave the price empty where this variant is not sold.
+                  Price and your cost per city. Leave the price empty where this variant is not sold.
                 </caption>
                 <thead className="text-xs text-[#5B6B7C]">
                   <tr>
                     <th className="py-1 pr-2 font-medium">City</th>
                     <th className="py-1 pr-2 font-medium">Price ($)</th>
                     <th className="py-1 pr-2 font-medium">Was ($), optional</th>
+                    <th className="py-1 pr-2 font-medium">Your cost ($)</th>
                     <th className="py-1 pr-2 font-medium">{r.id ? 'In stock' : 'Opening stock'}</th>
                   </tr>
                 </thead>
@@ -142,6 +140,7 @@ export default function VariantsField({
                   {cities.map((c) => {
                     const cell = r.cities[c.id] ?? emptyCell();
                     const price = toNumber(cell.priceUsd);
+                    const cost = toNumber(cell.costUsd);
                     const margin = price && cost !== null && price > 0 ? Math.round(((price - cost) / price) * 100) : null;
                     const cid = (name: string) => id(`${c.id}-${name}`);
                     return (
@@ -162,6 +161,11 @@ export default function VariantsField({
                           <label htmlFor={cid('was')} className="sr-only">Was price in {c.name} ($)</label>
                           <input id={cid('was')} className={`${input} w-28`} inputMode="decimal" value={cell.compareAtUsd}
                             onChange={(e) => updateCell(r.key, c.id, { compareAtUsd: e.target.value })} />
+                        </td>
+                        <td className="py-2 pr-2">
+                          <label htmlFor={cid('cost')} className="sr-only">Your cost in {c.name} ($)</label>
+                          <input id={cid('cost')} className={`${input} w-28`} inputMode="decimal" value={cell.costUsd}
+                            onChange={(e) => updateCell(r.key, c.id, { costUsd: e.target.value })} />
                         </td>
                         <td className="py-2 pr-2">
                           {r.id ? (

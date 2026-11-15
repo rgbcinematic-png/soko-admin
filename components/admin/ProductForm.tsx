@@ -17,7 +17,8 @@ export type ProductInitial = {
   featured: boolean;
   warrantyMonths: number;
   installAvailable: boolean;
-  installPriceUsd: string;
+  /** Installation price by city id, as typed. */
+  installByCity: Record<string, string>;
   instalmentsAllowed: boolean;
   bigItem: boolean;
   images: string[];
@@ -127,10 +128,26 @@ export default function ProductForm({
           Installation available
         </label>
         {installOn && (
-          <div className="flex max-w-xs flex-col gap-1">
-            <label htmlFor="installPriceUsd" className={label}>Installation price ($)</label>
-            <input id="installPriceUsd" name="installPriceUsd" inputMode="decimal" defaultValue={initial?.installPriceUsd} className={input} />
-          </div>
+          <fieldset className="flex flex-col gap-2">
+            <legend className={label}>Installation price per city ($). Leave empty where you don&apos;t install.</legend>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {cities.map((c) => (
+                <div key={c.id} className="flex flex-col gap-1">
+                  <label htmlFor={`install-${c.id}`} className="text-xs font-medium text-[#5B6B7C]">
+                    {c.name}{!c.isActive && ' (closed)'}
+                  </label>
+                  <input
+                    id={`install-${c.id}`}
+                    name={`install-${c.id}`}
+                    inputMode="decimal"
+                    defaultValue={initial?.installByCity[c.id]}
+                    placeholder="no installation"
+                    className={input}
+                  />
+                </div>
+              ))}
+            </div>
+          </fieldset>
         )}
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" name="instalmentsAllowed" defaultChecked={initial?.instalmentsAllowed} className="h-5 w-5" />

@@ -32,6 +32,7 @@ const summarySelect = (cityId: string) =>
     brand: true,
     images: true,
     installAvailable: true,
+    cities: { where: { cityId }, select: { installPriceUsd: true } },
     instalmentsAllowed: true,
     bigItem: true,
     variants: {
@@ -56,7 +57,7 @@ function toSummary(p: SummaryRow) {
     compareAtUsd: toNumber(cheapest?.compareAtUsd),
     hasOptions: p.variants.length > 1,
     inStock: offers.some((o) => o.stock > 0),
-    installAvailable: p.installAvailable,
+    installAvailable: p.installAvailable && p.cities[0]?.installPriceUsd != null,
     instalmentsAllowed: p.instalmentsAllowed,
     bigItem: p.bigItem,
   };
@@ -136,7 +137,7 @@ export async function getProductBySlug(slug: string, cityId: string) {
       specs: true,
       warrantyMonths: true,
       installAvailable: true,
-      installPriceUsd: true,
+      cities: { where: { cityId }, select: { installPriceUsd: true } },
       instalmentsAllowed: true,
       bigItem: true,
       category: { select: { slug: true, nameFr: true } },
@@ -152,9 +153,13 @@ export async function getProductBySlug(slug: string, cityId: string) {
     },
   });
   if (!p) return null;
+  const { cities, ...rest } = p;
+  // Installation is offered in this city only when it has a price here.
+  const installPriceUsd = p.installAvailable ? toNumber(cities[0]?.installPriceUsd) : null;
   return {
-    ...p,
-    installPriceUsd: toNumber(p.installPriceUsd),
+    ...rest,
+    installAvailable: installPriceUsd !== null,
+    installPriceUsd,
     specs: Array.isArray(p.specs) ? p.specs : [],
     variants: p.variants.map((v) => {
       const offer = v.offers[0];

@@ -29,7 +29,6 @@ const FIELD_NAMES: Record<string, string> = {
   description: 'Description',
   status: 'Status',
   warrantyMonths: 'Warranty',
-  installPriceUsd: 'Installation price',
   specsText: 'Specifications',
   label: 'label',
   sku: 'SKU',
@@ -62,7 +61,6 @@ const ProductInput = z.object({
   description: z.string().trim().max(8000, 'at most 8,000 characters').optional(),
   status: z.enum(['DRAFT', 'ACTIVE', 'ARCHIVED']),
   warrantyMonths: z.coerce.number().int('whole months only').min(0).max(120, 'at most 120 months'),
-  installPriceUsd: optionalMoney,
   specsText: z.string().max(3000).optional(),
 });
 
@@ -70,6 +68,7 @@ const ProductInput = z.object({
 const CityInput = z.object({
   priceUsd: optionalMoney.refine((n) => n === null || n > 0, 'needs a price above $0, or leave it empty'),
   compareAtUsd: optionalMoney,
+  costUsd: optionalMoney,
   openingStock: z.coerce.number().int('whole units only').min(0, 'cannot be negative').max(100_000).optional().default(0),
 });
 
@@ -77,7 +76,6 @@ const VariantInput = z.object({
   id: z.string().optional(),
   label: z.string().trim().min(1, 'needs a name, e.g. Standard or 43"').max(60),
   sku: z.string().trim().max(40).optional().default(''),
-  costUsd: optionalMoney,
   isActive: z.boolean().default(true),
   cities: z.record(z.string().max(40), CityInput).default({}),
 });
@@ -108,7 +106,6 @@ export async function saveProduct(_prev: FormState, formData: FormData): Promise
     description: text('description'),
     status: text('status'),
     warrantyMonths: text('warrantyMonths') || 0,
-    installPriceUsd: text('installPriceUsd'),
     specsText: text('specsText'),
   });
   if (!parsed.success) return { error: firstIssue(parsed.error) };
@@ -145,8 +142,18 @@ export async function saveProduct(_prev: FormState, formData: FormData): Promise
   if (d.status === 'ACTIVE' && !variants.some((row) => row.isActive && row.cities.some(([, c]) => c.priceUsd !== null))) {
     return { error: 'An active product needs a price in at least one city.' };
   }
-  if (installAvailable && d.installPriceUsd === null) {
-    return { error: 'Enter the installation price, or untick "Installation available".' };
+  // Installation price per city. The boxes are only on the page while "Installation available" is ticked;
+  // unticked, the saved prices are kept for next time but no city offers installation.
+  const installByCity: [string, number | null][] = [];
+  if (installAvailable) {
+    for (const c of cities) {
+      const r = optionalMoney.safeParse(text(`install-${c.id}`) ?? '');
+      if (!r.success) return { error: `Installation price in ${c.name}: ${r.error.issues[0]?.message ?? 'check it'}` };
+      installByCity.push([c.id, r.data]);
+    }
+    if (!installByCity.some(([, price]) => price !== null)) {
+      return { error: 'Enter the installation price in at least one city, or untick "Installation available".' };
+    }
   }
   const typedSkus = variants.map((row) => row.sku).filter(Boolean);
   if (new Set(typedSkus).size !== typedSkus.length) {
@@ -200,7 +207,6 @@ export async function saveProduct(_prev: FormState, formData: FormData): Promise
     specs: parseSpecs(d.specsText),
     warrantyMonths: d.warrantyMonths,
     installAvailable,
-    installPriceUsd: installAvailable ? d.installPriceUsd : null,
     instalmentsAllowed,
     bigItem,
     featured,
@@ -215,12 +221,19 @@ export async function saveProduct(_prev: FormState, formData: FormData): Promise
           ? await tx.product.update({ where: { id: existing.id }, data })
           : await tx.product.create({ data: { ...data, ref } });
 
+        for (const [cityId, installPriceUsd] of installByCity) {
+          await tx.productCity.upsert({
+            where: { productId_cityId: { productId: product.id, cityId } },
+            update: { installPriceUsd },
+            create: { productId: product.id, cityId, installPriceUsd },
+          });
+        }
+
         const kept = new Set<string>();
         for (const [position, row] of variants.entries()) {
           const common = {
             label: row.label,
             sku: row.sku,
-            costUsd: row.costUsd,
             isActive: row.isActive,
             position,
           };
@@ -231,15 +244,22 @@ export async function saveProduct(_prev: FormState, formData: FormData): Promise
             for (const [cityId, c] of row.cities) {
               await tx.variantCity.upsert({
                 where: { variantId_cityId: { variantId: row.id, cityId } },
-                update: { priceUsd: c.priceUsd, compareAtUsd: c.compareAtUsd },
-                create: { variantId: row.id, cityId, priceUsd: c.priceUsd, compareAtUsd: c.compareAtUsd },
+                update: { priceUsd: c.priceUsd, compareAtUsd: c.compareAtUsd, costUsd: c.costUsd },
+                create: { variantId: row.id, cityId, priceUsd: c.priceUsd, compareAtUsd: c.compareAtUsd, costUsd: c.costUsd },
               });
             }
           } else {
             const created = await tx.productVariant.create({ data: { ...common, productId: product.id } });
             for (const [cityId, c] of row.cities) {
               await tx.variantCity.create({
-                data: { variantId: created.id, cityId, priceUsd: c.priceUsd, compareAtUsd: c.compareAtUsd, stock: c.openingStock },
+                data: {
+                  variantId: created.id,
+                  cityId,
+                  priceUsd: c.priceUsd,
+                  compareAtUsd: c.compareAtUsd,
+                  costUsd: c.costUsd,
+                  stock: c.openingStock,
+                },
               });
               if (c.openingStock > 0) {
                 await tx.stockMovement.create({
