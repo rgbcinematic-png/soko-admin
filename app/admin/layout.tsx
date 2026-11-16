@@ -29,6 +29,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           <Link href="/admin/cities" className={navLink}>Cities</Link>
           <Link href="/admin/delivery" className={navLink}>Delivery</Link>
           <Link href="/admin/pickup-points" className={navLink}>Pickup points</Link>
+          <Link href="/admin/couriers" className={navLink}>Couriers</Link>
         </nav>
         <div className="ml-auto flex items-center gap-3 text-sm md:ml-0 md:mt-auto md:flex-col md:items-stretch">
           <Suspense fallback={<span className="text-white/60">…</span>}>

@@ -81,3 +81,6 @@ export const STATUS_STYLE: Record<OrderStatus, string> = {
   CANCELLED: 'bg-[#EEF1F4] text-[#5B6B7C]',
   RETURNED: 'bg-[#FDE8EC] text-[#BE123C]',
 };
+
+/** How a courier gets around. */
+export const VEHICLE_LABEL = { MOTO: 'Motorbike', VAN: 'Van', CAR: 'Car' } as const;

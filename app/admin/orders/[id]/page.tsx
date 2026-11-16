@@ -3,9 +3,10 @@ import { Suspense } from 'react';
 import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
 import { cdf, usd } from '@/lib/money';
-import { METHOD_LABEL, nextSteps, STATUS_LABEL, STATUS_STYLE } from '@/lib/orders';
+import { METHOD_LABEL, nextSteps, STATUS_LABEL, STATUS_STYLE, VEHICLE_LABEL } from '@/lib/orders';
 import { PAYMENT_LABEL } from '@/lib/payments';
 import { moveOrder, saveOrderNote } from '../actions';
+import { assignCourier } from '../../couriers/actions';
 
 type Params = Promise<{ id: string }>;
 type Search = Promise<{ error?: string }>;
@@ -39,6 +40,7 @@ async function OrderDetail({ params, searchParams }: { params: Params; searchPar
       customer: true,
       city: { select: { name: true } },
       pickupPoint: true,
+      courier: true,
       items: true,
       events: { orderBy: { createdAt: 'asc' }, include: { actor: { select: { name: true } } } },
     },
@@ -52,6 +54,23 @@ async function OrderDetail({ params, searchParams }: { params: Params; searchPar
   const when = (d: Date) =>
     d.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Kinshasa' });
   const waNumber = order.customer.phone.replace(/\D/g, '');
+  // Home deliveries that are confirmed but not delivered yet can be given to a courier of the order's city.
+  const courierStep = !order.pickupPointId && ['CONFIRMED', 'PACKED', 'OUT_FOR_DELIVERY'].includes(order.status);
+  const couriers = courierStep
+    ? await prisma.courier.findMany({ where: { cityId: order.cityId, isActive: true }, orderBy: { name: 'asc' } })
+    : [];
+  const bigItem = order.deliveryMethod === 'BIG_ITEM';
+  // What the courier needs, sent on WhatsApp. Never the delivery code: the customer gives it at the door.
+  const courierMessage = [
+    `Soko ${order.ref} — ${order.city.name}`,
+    `Client : ${order.recipientName || order.customer.name} ${order.recipientPhone || order.customer.phone}`,
+    `Adresse : ${[addr.commune, addr.quartier, addr.avenue].filter(Boolean).join(', ')}`,
+    `Repère : ${addr.landmark ?? ''}`,
+    addr.instructions ? `Note : ${addr.instructions}` : null,
+    order.timeSlot ? `Créneau : ${order.timeSlot}` : null,
+    `Articles : ${order.items.map((i) => `${i.quantity} × ${i.title} (${i.variantLabel})`).join(', ')}`,
+    order.paymentStatus === 'PAID' ? 'Déjà payé.' : `À encaisser : ${usd(order.totalUsd)}`,
+  ].filter(Boolean).join('\n');
   const card = 'flex flex-col gap-2 rounded-2xl bg-white p-5';
 
   return (
@@ -129,6 +148,56 @@ async function OrderDetail({ params, searchParams }: { params: Params; searchPar
           </p>
         </section>
       </div>
+
+      {(courierStep || order.courier) && !order.pickupPointId && (
+        <section className={card}>
+          <h2 className="text-lg font-extrabold">Courier</h2>
+          {order.courier ? (
+            <div className="flex flex-wrap items-center gap-3 text-sm">
+              <b>{order.courier.name}</b>
+              <span className="text-[#5B6B7C]">{VEHICLE_LABEL[order.courier.vehicle]}</span>
+              <a href={`tel:${order.courier.phone}`} className="font-bold text-[#B33A00] underline">{order.courier.phone}</a>
+              <a
+                href={`https://wa.me/${order.courier.phone.replace(/\D/g, '')}?text=${encodeURIComponent(courierMessage)}`}
+                target="_blank"
+                rel="noreferrer"
+                className="font-bold text-[#15803D] underline"
+              >
+                Send the delivery on WhatsApp
+              </a>
+            </div>
+          ) : (
+            <p className="text-sm text-[#5B6B7C]">No courier yet.</p>
+          )}
+          {courierStep && (
+            couriers.length > 0 ? (
+              // The key resets the choice to the saved courier after each save.
+              <form key={order.courierId ?? 'none'} action={assignCourier} className="flex flex-wrap items-end gap-2">
+                <input type="hidden" name="orderId" value={order.id} />
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="courierId" className="text-xs font-medium text-[#5B6B7C]">
+                    {order.courier ? 'Change courier' : 'Give to'} ({order.city.name} couriers{bigItem ? ', a van is needed' : ''})
+                  </label>
+                  <select id="courierId" name="courierId" defaultValue={order.courierId ?? ''} className="h-10 rounded-lg border border-[#C9D1DA] px-2 text-sm outline-none focus:border-[#0A2540]">
+                    <option value="">No courier</option>
+                    {couriers.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} · {VEHICLE_LABEL[c.vehicle]}{bigItem && c.vehicle !== 'VAN' ? ' (no van)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button type="submit" className="h-10 rounded-lg bg-[#0A2540] px-4 text-sm font-bold text-white">Save</button>
+              </form>
+            ) : (
+              <p className="text-sm">
+                No working couriers in {order.city.name}.{' '}
+                <Link href={`/admin/couriers?city=${order.cityId}`} className="font-bold underline">Add one</Link>
+              </p>
+            )
+          )}
+        </section>
+      )}
 
       <section className={card}>
         <h2 className="text-lg font-extrabold">Items</h2>
