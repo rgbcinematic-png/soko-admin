@@ -1,6 +1,8 @@
-import type { City, Market } from '@prisma/client';
+import type { City, Market, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { marketClosedResponse, shopperMarket } from '@/lib/markets';
+import { adjustedPrice } from '@/lib/city-pricing';
+import { toNumber } from '@/lib/money';
 
 /** Apps older than cities send no city: they shop in Kinshasa. */
 export const DEFAULT_CITY = 'kinshasa';
@@ -102,4 +104,60 @@ export async function cityReadiness(cityId: string): Promise<Readiness> {
   }
   if (productsInStock === 0) missing.push('Give at least one product a price and stock in this city.');
   return { deliveryTypes: options.length, servedCommunes, pickupPoints, productsInStock, missing };
+}
+
+type Tx = Prisma.TransactionClient;
+
+/**
+ * Works out again every price in a city that follows the generic price, after its % changed.
+ * Exact prices and products not sold there are left alone. Returns how many prices changed.
+ */
+export async function repriceCity(tx: Tx, cityId: string): Promise<number> {
+  const city = await tx.city.findUniqueOrThrow({ where: { id: cityId } });
+  const rows = await tx.variantCity.findMany({
+    where: { cityId, pricing: 'GENERIC' },
+    select: { variantId: true, priceUsd: true, compareAtUsd: true, variant: { select: { genericPriceUsd: true, genericCompareAtUsd: true } } },
+  });
+  let changed = 0;
+  for (const r of rows) {
+    const priceUsd = adjustedPrice(r.variant.genericPriceUsd, city);
+    const compareAtUsd = adjustedPrice(r.variant.genericCompareAtUsd, city);
+    if (priceUsd === toNumber(r.priceUsd) && compareAtUsd === toNumber(r.compareAtUsd)) continue;
+    await tx.variantCity.update({
+      where: { variantId_cityId: { variantId: r.variantId, cityId } },
+      // No generic price yet (a draft): stays unsold here (null), never sold at $0.
+      data: { priceUsd, compareAtUsd },
+    });
+    changed++;
+  }
+  return changed;
+}
+
+/**
+ * Puts every variant that has a generic price, and is not sold in this city yet, on the generic price here.
+ * Exact prices are kept. Stock is not touched. Returns how many variants were added.
+ */
+export async function sellAllAtGeneric(tx: Tx, cityId: string): Promise<number> {
+  const city = await tx.city.findUniqueOrThrow({ where: { id: cityId } });
+  const variants = await tx.productVariant.findMany({
+    where: {
+      genericPriceUsd: { not: null },
+      product: { status: { not: 'ARCHIVED' } },
+      offers: { none: { cityId, pricing: { not: 'OFF' } } },
+    },
+    select: { id: true, genericPriceUsd: true, genericCompareAtUsd: true },
+  });
+  for (const v of variants) {
+    const prices = {
+      pricing: 'GENERIC' as const,
+      priceUsd: adjustedPrice(v.genericPriceUsd, city),
+      compareAtUsd: adjustedPrice(v.genericCompareAtUsd, city),
+    };
+    await tx.variantCity.upsert({
+      where: { variantId_cityId: { variantId: v.id, cityId } },
+      update: prices,
+      create: { variantId: v.id, cityId, ...prices },
+    });
+  }
+  return variants.length;
 }

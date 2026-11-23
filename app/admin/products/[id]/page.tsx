@@ -6,6 +6,7 @@ import { getCategoryOptions } from '@/lib/catalog';
 import { getCurrentRate } from '@/lib/rate';
 import { toNumber } from '@/lib/money';
 import { allCities } from '@/lib/cities';
+import { cityColumn } from '@/components/admin/city-column';
 import ProductForm, { type ProductInitial } from '@/components/admin/ProductForm';
 import StockAdjust from '@/components/admin/StockAdjust';
 
@@ -72,10 +73,13 @@ async function EditProduct({ params, searchParams }: { params: Params; searchPar
       label: v.label,
       sku: v.sku,
       isActive: v.isActive,
+      genericPriceUsd: v.genericPriceUsd?.toString() ?? '',
+      genericCompareAtUsd: v.genericCompareAtUsd?.toString() ?? '',
       cities: Object.fromEntries(
         v.offers.map((o) => [
           o.cityId,
           {
+            pricing: o.pricing,
             priceUsd: o.priceUsd?.toString() ?? '',
             compareAtUsd: o.compareAtUsd?.toString() ?? '',
             costUsd: o.costUsd?.toString() ?? '',
@@ -88,7 +92,7 @@ async function EditProduct({ params, searchParams }: { params: Params; searchPar
   const stockByVariant = Object.fromEntries(
     product.variants.map((v) => [v.id, Object.fromEntries(v.offers.map((o) => [o.cityId, o.stock]))]),
   );
-  const cityColumns = cities.map((c) => ({ id: c.id, name: c.name, isActive: c.isActive }));
+  const cityColumns = cities.map(cityColumn);
   const when = (d: Date) =>
     d.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Kinshasa' });
 
@@ -133,7 +137,7 @@ async function EditProduct({ params, searchParams }: { params: Params; searchPar
                   <div className="flex flex-wrap items-baseline gap-3 text-sm">
                     <span className="w-28 font-bold">{c.name}</span>
                     <span className={`font-bold ${stock <= 0 ? 'text-[#BE123C]' : ''}`}>{stock} in stock</span>
-                    {!offer?.priceUsd && <span className="text-xs text-[#5B6B7C]">no price: not sold here</span>}
+                    {!offer?.priceUsd && <span className="text-xs text-[#5B6B7C]">not sold here</span>}
                   </div>
                   <StockAdjust variantId={v.id} cityId={c.id} />
                 </div>

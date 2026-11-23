@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { nextProductRef, slugify, uniqueSlug } from '@/lib/catalog';
+import { effectivePrices } from '@/lib/city-pricing';
 
 export type FormState = { error?: string; message?: string };
 
@@ -33,6 +34,8 @@ const FIELD_NAMES: Record<string, string> = {
   label: 'label',
   sku: 'SKU',
   priceUsd: 'price',
+  genericPriceUsd: 'generic price',
+  genericCompareAtUsd: 'generic "was" price',
   compareAtUsd: '"was" price',
   costUsd: 'cost',
   openingStock: 'opening stock',
@@ -64,9 +67,10 @@ const ProductInput = z.object({
   specsText: z.string().max(3000).optional(),
 });
 
-/** A variant's price and stock in one city. No price = not sold there. */
+/** A variant's price and stock in one city. The price boxes only count when the city has an exact price. */
 const CityInput = z.object({
-  priceUsd: optionalMoney.refine((n) => n === null || n > 0, 'needs a price above $0, or leave it empty'),
+  pricing: z.enum(['GENERIC', 'EXACT', 'OFF']).default('OFF'),
+  priceUsd: optionalMoney.refine((n) => n === null || n > 0, 'needs a price above $0'),
   compareAtUsd: optionalMoney,
   costUsd: optionalMoney,
   openingStock: z.coerce.number().int('whole units only').min(0, 'cannot be negative').max(100_000).optional().default(0),
@@ -77,6 +81,8 @@ const VariantInput = z.object({
   label: z.string().trim().min(1, 'needs a name, e.g. Standard or 43"').max(60),
   sku: z.string().trim().max(40).optional().default(''),
   isActive: z.boolean().default(true),
+  genericPriceUsd: optionalMoney.refine((n) => n === null || n > 0, 'needs a price above $0'),
+  genericCompareAtUsd: optionalMoney,
   cities: z.record(z.string().max(40), CityInput).default({}),
 });
 
@@ -117,16 +123,32 @@ export async function saveProduct(_prev: FormState, formData: FormData): Promise
   } catch {
     return { error: 'The variants could not be read. Reload the page and try again.' };
   }
-  const cities = await prisma.city.findMany({ select: { id: true, name: true } });
+  const cities = await prisma.city.findMany({ select: { id: true, name: true, priceAdjustPct: true, priceRoundUsd: true } });
+  const cityById = Object.fromEntries(cities.map((c) => [c.id, c]));
   const cityNames = Object.fromEntries(cities.map((c) => [c.id, c.name]));
   const v = z.array(VariantInput).max(30, 'at most 30 variants').safeParse(rawVariants);
   if (!v.success) return { error: firstIssue(v.error, true, cityNames) };
+  // Prices are worked out here from the cities' saved %, never taken from the browser.
   const variants = v.data.map((row) => ({
     ...row,
     sku: row.sku.toUpperCase(),
     // Only cities that exist; a city left out of the form keeps what it had.
-    cities: Object.entries(row.cities).filter(([cityId]) => cityId in cityNames),
+    cities: Object.entries(row.cities)
+      .filter(([cityId]) => cityId in cityNames)
+      .map(([cityId, c]) => {
+        const generic = { priceUsd: row.genericPriceUsd, compareAtUsd: row.genericCompareAtUsd };
+        return [cityId, { ...c, ...effectivePrices(c.pricing, generic, c, cityById[cityId]) }] as const;
+      }),
   }));
+  for (const [i, row] of variants.entries()) {
+    const n = `Variant ${i + 1}`;
+    // A draft can wait for its price; it is not sold anywhere until it has one.
+    if (d.status === 'ACTIVE' && row.isActive && row.genericPriceUsd === null && row.cities.some(([, c]) => c.pricing === 'GENERIC')) {
+      return { error: `${n}: enter the generic price, or set each city to "Exact price" or "Not sold".` };
+    }
+    const noExact = row.cities.find(([, c]) => c.pricing === 'EXACT' && c.priceUsd === null);
+    if (noExact) return { error: `${n} in ${cityNames[noExact[0]]}: enter the exact price, or choose another option.` };
+  }
 
   const installAvailable = formData.get('installAvailable') === 'on';
   const instalmentsAllowed = formData.get('instalmentsAllowed') === 'on';
@@ -234,6 +256,8 @@ export async function saveProduct(_prev: FormState, formData: FormData): Promise
           const common = {
             label: row.label,
             sku: row.sku,
+            genericPriceUsd: row.genericPriceUsd,
+            genericCompareAtUsd: row.genericCompareAtUsd,
             isActive: row.isActive,
             position,
           };
@@ -244,8 +268,8 @@ export async function saveProduct(_prev: FormState, formData: FormData): Promise
             for (const [cityId, c] of row.cities) {
               await tx.variantCity.upsert({
                 where: { variantId_cityId: { variantId: row.id, cityId } },
-                update: { priceUsd: c.priceUsd, compareAtUsd: c.compareAtUsd, costUsd: c.costUsd },
-                create: { variantId: row.id, cityId, priceUsd: c.priceUsd, compareAtUsd: c.compareAtUsd, costUsd: c.costUsd },
+                update: { pricing: c.pricing, priceUsd: c.priceUsd, compareAtUsd: c.compareAtUsd, costUsd: c.costUsd },
+                create: { variantId: row.id, cityId, pricing: c.pricing, priceUsd: c.priceUsd, compareAtUsd: c.compareAtUsd, costUsd: c.costUsd },
               });
             }
           } else {
@@ -255,6 +279,7 @@ export async function saveProduct(_prev: FormState, formData: FormData): Promise
                 data: {
                   variantId: created.id,
                   cityId,
+                  pricing: c.pricing,
                   priceUsd: c.priceUsd,
                   compareAtUsd: c.compareAtUsd,
                   costUsd: c.costUsd,

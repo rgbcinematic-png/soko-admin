@@ -5,6 +5,7 @@ import { getCategoryOptions } from '@/lib/catalog';
 import { getCurrentRate } from '@/lib/rate';
 import { toNumber } from '@/lib/money';
 import { allCities } from '@/lib/cities';
+import { cityColumn } from '@/components/admin/city-column';
 import ProductForm from '@/components/admin/ProductForm';
 
 export default function NewProductPage() {
@@ -31,7 +32,7 @@ async function NewProduct() {
     <ProductForm
       categories={categories}
       rate={toNumber(rate?.cdfPerUsd)}
-      cities={cities.map((c) => ({ id: c.id, name: c.name, isActive: c.isActive }))}
+      cities={cities.map(cityColumn)}
     />
   );
 }
