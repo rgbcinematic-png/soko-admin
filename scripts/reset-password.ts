@@ -1,6 +1,7 @@
 /**
  * Sets a new password for an admin account, typed in the terminal (hidden, never saved in a file).
  *
+ *   npm run reset-password                 (the account in SEED_ADMIN_EMAIL in .env)
  *   node scripts/reset-password.ts you@example.com
  *
  * Uses the database in .env — the LIVE one. Changes only that account's password.
@@ -33,12 +34,13 @@ function askHidden(question: string): Promise<string> {
 }
 
 async function main() {
-  const email = process.argv[2]?.trim().toLowerCase();
+  const email = (process.argv[2] ?? process.env.SEED_ADMIN_EMAIL)?.trim().toLowerCase();
   if (!email) throw new Error('Give the account email: node scripts/reset-password.ts you@example.com');
   const user = await prisma.user.findUnique({ where: { email }, select: { id: true, name: true, role: true } });
   if (!user) throw new Error(`No admin account with the email ${email}.`);
 
-  console.log(`Account: ${user.name} (${user.role}). Type the new password — nothing shows while you type.`);
+  console.log(`Account: ${email} — ${user.name} (${user.role}).`);
+  console.log('Type the new password and press Enter. Nothing shows while you type: that is normal.');
   const password = await askHidden('New password (at least 12 characters): ');
   if (password.length < 12) throw new Error('Too short: use at least 12 characters. Nothing was changed.');
   const again = await askHidden('Type it again: ');
